@@ -10,7 +10,7 @@ from homeassistant.helpers import config_validation as cv
 from .const import COLOR_OPTIONS, DOMAIN, DPI_MAX, DPI_MIN, FORMAT_OPTIONS, SERVICE_SCAN
 from .coordinator import NeatScannerCoordinator
 
-PLATFORMS = ["binary_sensor", "sensor", "select", "button", "event"]
+PLATFORMS = ["binary_sensor", "sensor", "select", "button", "event", "switch"]
 
 SCAN_SCHEMA = vol.Schema(
     {
@@ -20,6 +20,7 @@ SCAN_SCHEMA = vol.Schema(
         vol.Optional("save_dir"): cv.string,
         vol.Optional("sheets"): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
         vol.Optional("auto_crop"): cv.boolean,
+        vol.Optional("duplex"): cv.boolean,
         vol.Optional("entry_id"): cv.string,
     }
 )
@@ -41,7 +42,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             files = await target.async_scan(
                 call.data.get("dpi"), call.data.get("color"),
                 call.data.get("save_dir"), call.data.get("format"),
-                call.data.get("sheets"), call.data.get("auto_crop"),
+                call.data.get("sheets"), call.data.get("auto_crop"), call.data.get("duplex"),
             )
             return {"files": files}
 

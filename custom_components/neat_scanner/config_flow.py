@@ -7,7 +7,7 @@ from homeassistant.config_entries import ConfigFlow, OptionsFlow
 from homeassistant.core import callback
 
 from .const import (
-    COLOR_OPTIONS, CONF_AUTO_CROP, CONF_MONITOR, CONF_SCAN_ON_BUTTON, DEFAULT_MONITOR, DEFAULT_SCAN_ON_BUTTON, CONF_BUSID, CONF_COLOR, CONF_DPI, CONF_FORMAT, CONF_HOST,
+    COLOR_OPTIONS, CONF_AUTO_CROP, CONF_DUPLEX, DEFAULT_DUPLEX, CONF_MONITOR, CONF_SCAN_ON_BUTTON, DEFAULT_MONITOR, DEFAULT_SCAN_ON_BUTTON, CONF_BUSID, CONF_COLOR, CONF_DPI, CONF_FORMAT, CONF_HOST,
     CONF_PORT, CONF_SAVE_DIR, CONF_SCAN_INTERVAL, CONF_SHEETS, DEFAULT_AUTO_CROP, DEFAULT_COLOR, DEFAULT_DPI,
     DEFAULT_FORMAT, DEFAULT_PORT, DEFAULT_SAVE_DIR, DEFAULT_SHEETS, DEFAULT_SCAN_INTERVAL,
     DOMAIN, DPI_MAX, DPI_MIN, FORMAT_OPTIONS, NEAT_PID, NEAT_VID,
@@ -85,6 +85,7 @@ class NeatScannerOptionsFlow(OptionsFlow):
             vol.Required(CONF_SHEETS, default=cur.get(CONF_SHEETS, DEFAULT_SHEETS)): vol.All(int, vol.Range(min=1, max=100)),
             vol.Required(CONF_MONITOR, default=cur.get(CONF_MONITOR, DEFAULT_MONITOR)): bool,
             vol.Required(CONF_SCAN_ON_BUTTON, default=cur.get(CONF_SCAN_ON_BUTTON, DEFAULT_SCAN_ON_BUTTON)): bool,
+            vol.Required(CONF_DUPLEX, default=cur.get(CONF_DUPLEX, DEFAULT_DUPLEX)): bool,
             vol.Required(CONF_AUTO_CROP, default=cur.get(CONF_AUTO_CROP, DEFAULT_AUTO_CROP)): bool,
             vol.Required(CONF_SCAN_INTERVAL, default=cur.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)):
                 vol.All(int, vol.Range(min=10, max=600)),

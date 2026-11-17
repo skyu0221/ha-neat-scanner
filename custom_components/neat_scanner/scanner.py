@@ -208,13 +208,16 @@ async def _finish_sheet(session: UsbIpSession, script: dict, more: bool) -> None
 class NeatBackend:
     """Neat protocol over USB/IP: replays captured register programs and decodes the stream."""
 
-    def __init__(self, max_sheets: int = 1, auto_crop: bool = True) -> None:
+    def __init__(self, max_sheets: int = 1, auto_crop: bool = True, duplex: bool = False) -> None:
         self.max_sheets = max_sheets
         self.auto_crop = auto_crop
+        self.duplex = duplex
 
     async def scan(self, session: UsbIpSession, dpi: int, color: str) -> list[Page]:
         loop = asyncio.get_running_loop()
-        name = "c600" if dpi > 300 else "c300"
+        if self.duplex and dpi > 300:
+            raise ScanError("Double-sided scanning supports up to 300 dpi")
+        name = "d300" if self.duplex else ("c600" if dpi > 300 else "c300")
         script = await loop.run_in_executor(None, _load_script, name)
         pages: list[Page] = []
         if not (await _paper_flags(session))["paper"]:
@@ -227,11 +230,14 @@ class NeatBackend:
                 raise
             more = sheet + 1 < self.max_sheets and (await _paper_flags(session))["paper"]
             await _finish_sheet(session, script, more)
-            if len(raw) // (LINE_BYTES_300 * 3 * (2 if dpi > 300 else 1)) < 8:
+            if len(raw) // (LINE_BYTES_300 * (6 if self.duplex else 3) * (2 if dpi > 300 else 1)) < 8:
                 if sheet == 0:
                     raise ScanError("The scanner returned too little data (is paper loaded in the feeder?)")
                 break  # feeder empty: done
-            pages.append(await loop.run_in_executor(None, decode_page, raw, dpi, color, self.auto_crop))
+            if self.duplex:
+                pages += await loop.run_in_executor(None, decode_duplex, raw, dpi, color, self.auto_crop)
+            else:
+                pages.append(await loop.run_in_executor(None, decode_page, raw, dpi, color, self.auto_crop))
             del raw
             if not more:
                 break
@@ -249,7 +255,7 @@ def _smooth(x, k: int):
     return ((c[k:] - c[:-k]) / k).astype(np.float32)
 
 
-def decode_page(raw: bytes, dpi: int, color: str, auto_crop: bool = True) -> Page:
+def decode_page(raw: bytes, dpi: int, color: str, auto_crop: bool = True, mirror: bool = False) -> Page:
     """Turn the raw sensor stream into an image (blocking; run in an executor).
 
     The CIS has three segments that are read out in parallel and interleaved byte by
@@ -268,6 +274,8 @@ def decode_page(raw: bytes, dpi: int, color: str, auto_crop: bool = True) -> Pag
     lead, trail = 20 * scale, 4 * scale
     parts = [g[:, :, lead : seg - trail, tap] for tap in SEGMENT_ORDER]
     img = np.concatenate(parts, axis=2).transpose(0, 2, 1)[::-1, ::-1]  # (rows, width, RGB)
+    if mirror:  # the back sensor looks at the sheet from the other side
+        img = img[:, ::-1]
     width = img.shape[1]
 
     # Per column white level (flat-field): the driver calibrates in hardware, we estimate it.
@@ -307,12 +315,30 @@ def decode_page(raw: bytes, dpi: int, color: str, auto_crop: bool = True) -> Pag
     return Page(img_out.width, img_out.height, img_out.mode, img_out.tobytes())
 
 
+def decode_duplex(raw: bytes, dpi: int, color: str, auto_crop: bool = True) -> list[Page]:
+    """Split a duplex stream (6 lines per row: 3 lines of one side, then 3 of the other)."""
+    import numpy as np
+
+    line = LINE_BYTES_300 * (2 if dpi > 300 else 1)
+    groups = len(raw) // line // 6
+    if groups < 8:
+        raise ScanError("The scanner returned too little data (is paper loaded in the feeder?)")
+    g = np.frombuffer(raw, dtype=np.uint8, count=groups * 6 * line).reshape(groups, 6, line)
+    front = np.ascontiguousarray(g[:, 3:6]).tobytes()
+    back = np.ascontiguousarray(g[:, 0:3]).tobytes()
+    return [
+        decode_page(front, dpi, color, auto_crop),
+        decode_page(back, dpi, color, auto_crop, mirror=True),
+    ]
+
+
 async def run_scan(
     host: str, port: int, busid: str, dpi: int, color: str,
     backend: Backend | None = None, max_sheets: int = 1, auto_crop: bool = True,
+    duplex: bool = False,
 ) -> list[Page]:
     """Import the remote scanner, scan the ADF and return the pages."""
-    backend = backend or NeatBackend(max_sheets, auto_crop)
+    backend = backend or NeatBackend(max_sheets, auto_crop, duplex)
     for attempt in (1, 2):
         try:
             async with UsbIpSession(host, busid, port) as session:

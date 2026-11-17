@@ -39,7 +39,8 @@
           "sheets": "Maximum sheets per scan",
           "auto_crop": "Crop to the paper automatically",
           "monitor": "Watch paper, cover and button (keeps the scanner connected)",
-          "scan_on_button": "Scan when the scanner button is pressed"
+          "scan_on_button": "Scan when the scanner button is pressed",
+          "duplex": "Scan both sides (up to 300 dpi)"
         }
       }
     },
@@ -102,6 +103,11 @@
           }
         }
       }
+    },
+    "switch": {
+      "duplex": {
+        "name": "Double-sided"
+      }
     }
   },
   "services": {
@@ -136,6 +142,10 @@
         "auto_crop": {
           "name": "Auto crop",
           "description": "Crop each page to the paper area."
+        },
+        "duplex": {
+          "name": "Double-sided",
+          "description": "Scan both sides of each sheet (up to 300 dpi); the front page is followed by the back page."
         }
       }
     }

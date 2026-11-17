@@ -28,6 +28,9 @@ scan:
     auto_crop:
       selector:
         boolean:
+    duplex:
+      selector:
+        boolean:
     entry_id:
       advanced: true
       selector:

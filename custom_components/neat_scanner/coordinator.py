@@ -11,7 +11,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
-    CONF_AUTO_CROP, CONF_BUSID, CONF_MONITOR, CONF_SCAN_ON_BUTTON, DEFAULT_MONITOR, DEFAULT_SCAN_ON_BUTTON, EVENT_BUTTON, CONF_COLOR, CONF_DPI, CONF_FORMAT, CONF_HOST, CONF_PORT,
+    CONF_AUTO_CROP, CONF_BUSID, CONF_DUPLEX, DEFAULT_DUPLEX, CONF_MONITOR, CONF_SCAN_ON_BUTTON, DEFAULT_MONITOR, DEFAULT_SCAN_ON_BUTTON, EVENT_BUTTON, CONF_COLOR, CONF_DPI, CONF_FORMAT, CONF_HOST, CONF_PORT,
     CONF_SAVE_DIR, CONF_SCAN_INTERVAL, CONF_SHEETS, DEFAULT_AUTO_CROP, DEFAULT_COLOR, DEFAULT_DPI,
     DEFAULT_FORMAT, DEFAULT_SAVE_DIR, DEFAULT_SHEETS, DEFAULT_SCAN_INTERVAL, DOMAIN,
     EVENT_SCAN_COMPLETE, NEAT_PID, NEAT_VID,
@@ -37,6 +37,7 @@ class NeatScannerCoordinator(DataUpdateCoordinator[dict]):
         self.busid = entry.data[CONF_BUSID]
         self.dpi: int = opts.get(CONF_DPI, DEFAULT_DPI)
         self.color: str = opts.get(CONF_COLOR, DEFAULT_COLOR)
+        self.duplex: bool = opts.get(CONF_DUPLEX, DEFAULT_DUPLEX)
         self.scanning = False
         self.last_scan: datetime | None = None
         self.last_files: list[str] = []
@@ -145,6 +146,7 @@ class NeatScannerCoordinator(DataUpdateCoordinator[dict]):
         self, dpi: int | None = None, color: str | None = None,
         save_dir: str | None = None, fmt: str | None = None,
         sheets: int | None = None, auto_crop: bool | None = None,
+        duplex: bool | None = None,
     ) -> list[str]:
         """Scan the ADF, save the pages, fire an event and return the paths."""
         if self._lock.locked():
@@ -167,6 +169,7 @@ class NeatScannerCoordinator(DataUpdateCoordinator[dict]):
                     self.host, self.port, self.busid, dpi or self.dpi, color or self.color,
                     max_sheets=sheets or opts.get(CONF_SHEETS, DEFAULT_SHEETS),
                     auto_crop=opts.get(CONF_AUTO_CROP, DEFAULT_AUTO_CROP) if auto_crop is None else auto_crop,
+                    duplex=self.duplex if duplex is None else duplex,
                 )
                 files = await self.hass.async_add_executor_job(
                     save_pages, pages, directory, fmt or self.file_format

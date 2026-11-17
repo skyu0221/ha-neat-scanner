@@ -14,6 +14,8 @@ standard `usbipd` server.
 - **Scanner button**: an event entity (`pressed`) plus the `neat_scanner_button` event; by default
   pressing the button on the scanner starts a scan (option *Scan when the scanner button is pressed*)
 - **Paper in feeder** and **cover** binary sensors, polled four times a second
+- **Double-sided scanning** (switch, option and `duplex` service field): each sheet gives a front
+  page followed by a back page, up to 300 dpi
 - Online/offline binary sensor (polls the USB/IP server and checks the scanner is exported)
 - Scan button plus **DPI** (any value from 75 to 600) and **color mode** (color/grayscale/black and white) selectors
 - `neat_scanner.scan` service with `dpi`, `color`, `format` (png/jpeg/pdf) and `save_dir`

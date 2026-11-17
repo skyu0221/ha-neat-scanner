@@ -48,6 +48,15 @@ bulk OUT `0x02`, interrupt IN `0x83` (unused in the capture).
 - Letter and receipt scans use identical register programs and upload tables (verified).
 - The earlier black and white capture is truncated by USBPcap (65535 byte snaplen).
 
+## Duplex (verified on hardware, 300 dpi color)
+
+- The program from the Neat app duplex capture (`d300`) streams **6 lines per row**: lines 3-5 are the
+  front side (R, G, B) and lines 0-2 the back side. The front decodes like a single sided scan;
+  the back needs a horizontal mirror. About 20 560 lines for a letter page (twice the single side).
+- Only 300 dpi color was captured, so duplex is limited to 300 dpi (lower values are resampled).
+- Duplex stacks (several double-sided sheets) are not verified; the stop sequence of that capture
+  has no eject step.
+
 ## USB/IP session hand-over
 
 After one USB/IP session closes, the phone needs about 1 to 2 seconds before the scanner accepts the
