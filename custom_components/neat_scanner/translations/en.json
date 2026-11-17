@@ -40,7 +40,9 @@
           "auto_crop": "Crop to the paper automatically",
           "monitor": "Watch paper, cover and button (keeps the scanner connected)",
           "scan_on_button": "Scan when the scanner button is pressed",
-          "duplex": "Scan both sides (up to 300 dpi)"
+          "duplex": "Scan both sides (up to 300 dpi)",
+          "deskew": "Straighten skewed pages",
+          "auto_rotate": "Turn upside-down pages around (experimental)"
         }
       }
     },
@@ -72,6 +74,9 @@
       },
       "last_scan": {
         "name": "Last scan"
+      },
+      "calibration": {
+        "name": "Calibrated"
       }
     },
     "select": {
@@ -90,6 +95,9 @@
     "button": {
       "scan": {
         "name": "Scan"
+      },
+      "calibrate": {
+        "name": "Calibrate"
       }
     },
     "event": {
@@ -146,6 +154,16 @@
         "duplex": {
           "name": "Double-sided",
           "description": "Scan both sides of each sheet (up to 300 dpi); the front page is followed by the back page."
+        }
+      }
+    },
+    "calibrate": {
+      "name": "Calibrate",
+      "description": "Scan a blank white letter-size sheet to measure the white level of every sensor column, so the left and right regions of later scans match.",
+      "fields": {
+        "entry_id": {
+          "name": "Config entry",
+          "description": "Only needed with several scanners."
         }
       }
     }

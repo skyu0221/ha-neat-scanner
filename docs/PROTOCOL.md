@@ -117,6 +117,26 @@ scan letter width. The driver does auto crop, auto deskew and auto rotate in sof
 
 Native modes in the INI: 600/300/200/150/75 dpi, color and gray, front and back.
 
+## Native modes and calibration (verified on hardware)
+
+- `s150` (150 dpi color): 1332 bytes per line (3 taps x 444 px), R, G, B on three lines, dummy pixels
+  about 13 at the start and 6 at the end of each segment.
+- `g300` (300 dpi gray): 2646 bytes per line, **one line per image row**, a third of the data of color.
+- Per scan the driver uploads shading tables with bulk OUT: three tables of 11956 bytes (22708 at
+  600 dpi), one per color. Each is a list of 16-bit little-endian (dark, gain) pairs per pixel; the
+  gain mean is about 1.28 (0x4000 = 1.0). The captured tables are byte identical between 300 and 150
+  dpi scans, so they are stored calibration data, not computed per scan. Duplex uses six tables
+  (back first, then front); gray uses one.
+- The driver INI describes the calibration: `DarkShadingLine=120`, `WhiteShadingLine=100`,
+  `LineShadingLine=10`, `ShadingShift=2`, AFE registers in `Afex=` (offsets `0x20..0x22`, gains
+  `0x28..0x2a`), `ReDoCalibration=1` and `IsSkipStore2Flash=0` (result is also kept in the scanner's
+  flash). The calibration scan itself has not been captured yet.
+- Software calibration in the integration: a white sheet scan (duplex pass) gives a per column white
+  level for the front and back sensor. The white sheet saturates at 255 in the left segment, so the
+  integration also levels the three segments against the page's own paper white.
+- The sensor edge: the first ~45 columns read about 155 for both white paper and no paper, and the
+  back sensor is dark at its far end; those columns are excluded from the paper area.
+
 ## Open questions
 
 - Exact formulas for the computed registers and the width-dependent upload tables, so that any

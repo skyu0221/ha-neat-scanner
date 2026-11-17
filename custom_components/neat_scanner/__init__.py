@@ -8,7 +8,7 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import Event, HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.helpers import config_validation as cv
 
-from .const import COLOR_OPTIONS, DOMAIN, DPI_MAX, DPI_MIN, FORMAT_OPTIONS, SERVICE_SCAN
+from .const import COLOR_OPTIONS, DOMAIN, DPI_MAX, DPI_MIN, FORMAT_OPTIONS, SERVICE_CALIBRATE, SERVICE_SCAN
 from .coordinator import NeatScannerCoordinator
 
 PLATFORMS = ["binary_sensor", "sensor", "select", "button", "event", "switch"]
@@ -29,6 +29,7 @@ SCAN_SCHEMA = vol.Schema(
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = NeatScannerCoordinator(hass, entry)
+    await coordinator.async_load_calibration()
     await coordinator.async_config_entry_first_refresh()
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -58,6 +59,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             DOMAIN, SERVICE_SCAN, _scan, schema=SCAN_SCHEMA,
             supports_response=SupportsResponse.OPTIONAL,
         )
+
+        async def _calibrate(call: ServiceCall) -> None:
+            coords = hass.data[DOMAIN]
+            target = coords.get(call.data.get("entry_id")) or next(iter(coords.values()))
+            await target.async_calibrate()
+
+        hass.services.async_register(
+            DOMAIN, SERVICE_CALIBRATE, _calibrate,
+            schema=vol.Schema({vol.Optional("entry_id"): cv.string}),
+        )
     return True
 
 
@@ -72,4 +83,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN].pop(entry.entry_id)
         if not hass.data[DOMAIN]:
             hass.services.async_remove(DOMAIN, SERVICE_SCAN)
+            hass.services.async_remove(DOMAIN, SERVICE_CALIBRATE)
     return ok

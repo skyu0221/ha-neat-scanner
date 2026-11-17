@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.const import EntityCategory
 
 from .const import DOMAIN
 from .entity import NeatEntity
@@ -9,7 +10,7 @@ from .entity import NeatEntity
 
 async def async_setup_entry(hass, entry, async_add_entities):
     c = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([ScanStatus(c), LastScan(c)])
+    async_add_entities([ScanStatus(c), LastScan(c), Calibration(c)])
 
 
 class ScanStatus(NeatEntity, SensorEntity):
@@ -49,3 +50,18 @@ class LastScan(NeatEntity, SensorEntity):
     def extra_state_attributes(self):
         return {"files": self.coordinator.last_files,
                 "save_dir": self.coordinator.save_dir}
+
+
+class Calibration(NeatEntity, SensorEntity):
+    """When the white reference was last measured (unknown = never calibrated)."""
+
+    _attr_translation_key = "calibration"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator, "calibration")
+
+    @property
+    def native_value(self):
+        return self.coordinator.calibrated_at

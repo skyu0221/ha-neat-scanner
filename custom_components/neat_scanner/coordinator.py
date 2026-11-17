@@ -8,15 +8,16 @@ from datetime import datetime, timedelta, timezone
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
-    CONF_AUTO_CROP, CONF_BUSID, CONF_DUPLEX, DEFAULT_DUPLEX, CONF_MONITOR, CONF_SCAN_ON_BUTTON, DEFAULT_MONITOR, DEFAULT_SCAN_ON_BUTTON, EVENT_BUTTON, CONF_COLOR, CONF_DPI, CONF_FORMAT, CONF_HOST, CONF_PORT,
+    CONF_AUTO_CROP, CONF_AUTO_ROTATE, CONF_DESKEW, DEFAULT_AUTO_ROTATE, DEFAULT_DESKEW, STORAGE_VERSION, CONF_BUSID, CONF_DUPLEX, DEFAULT_DUPLEX, CONF_MONITOR, CONF_SCAN_ON_BUTTON, DEFAULT_MONITOR, DEFAULT_SCAN_ON_BUTTON, EVENT_BUTTON, CONF_COLOR, CONF_DPI, CONF_FORMAT, CONF_HOST, CONF_PORT,
     CONF_SAVE_DIR, CONF_SCAN_INTERVAL, CONF_SHEETS, DEFAULT_AUTO_CROP, DEFAULT_COLOR, DEFAULT_DPI,
     DEFAULT_FORMAT, DEFAULT_SAVE_DIR, DEFAULT_SHEETS, DEFAULT_SCAN_INTERVAL, DOMAIN,
     EVENT_SCAN_COMPLETE, NEAT_PID, NEAT_VID,
 )
-from .scanner import SESSION_SETTLE, ScanError, run_scan, save_pages, watch_sensors
+from .scanner import SESSION_SETTLE, ScanError, run_calibration, run_scan, save_pages, watch_sensors
 from .usbip_client import UsbIpError, list_devices
 
 _LOGGER = logging.getLogger(__name__)
@@ -49,6 +50,8 @@ class NeatScannerCoordinator(DataUpdateCoordinator[dict]):
         self._monitor_task: asyncio.Task | None = None
         self._button_listeners: list = []
         self._monitor_stop: asyncio.Event | None = None
+        self._store: Store = Store(hass, STORAGE_VERSION, f"{DOMAIN}_calibration_{entry.entry_id}")
+        self.calibration: dict = {}
 
     @property
     def save_dir(self) -> str:
@@ -61,6 +64,16 @@ class NeatScannerCoordinator(DataUpdateCoordinator[dict]):
     @property
     def options(self) -> dict:
         return {**self.entry.data, **self.entry.options}
+
+    async def async_load_calibration(self) -> None:
+        self.calibration = await self._store.async_load() or {}
+
+    @property
+    def calibrated_at(self) -> datetime | None:
+        try:
+            return datetime.fromisoformat(self.calibration["created"]).astimezone()
+        except (KeyError, ValueError):
+            return None
 
     # --- sensor monitor (paper, cover, scanner button) -------------------------------------
     def start_monitor(self) -> None:
@@ -170,6 +183,9 @@ class NeatScannerCoordinator(DataUpdateCoordinator[dict]):
                     max_sheets=sheets or opts.get(CONF_SHEETS, DEFAULT_SHEETS),
                     auto_crop=opts.get(CONF_AUTO_CROP, DEFAULT_AUTO_CROP) if auto_crop is None else auto_crop,
                     duplex=self.duplex if duplex is None else duplex,
+                    calibration=self.calibration,
+                    deskew=opts.get(CONF_DESKEW, DEFAULT_DESKEW),
+                    rotate=opts.get(CONF_AUTO_ROTATE, DEFAULT_AUTO_ROTATE),
                 )
                 files = await self.hass.async_add_executor_job(
                     save_pages, pages, directory, fmt or self.file_format
@@ -185,3 +201,26 @@ class NeatScannerCoordinator(DataUpdateCoordinator[dict]):
         self.hass.bus.async_fire(EVENT_SCAN_COMPLETE, {"files": files, "pages": len(pages)})
         self.async_update_listeners()
         return files
+
+    async def async_calibrate(self) -> None:
+        """Scan a blank white sheet and store the per column white reference."""
+        if self._lock.locked():
+            raise HomeAssistantError("A scan is already in progress")
+        async with self._lock:
+            self.scanning, self.last_error = True, None
+            self.async_update_listeners()
+            if self._monitor_task is not None:
+                await self.stop_monitor()
+                await asyncio.sleep(SESSION_SETTLE)
+            try:
+                cal = await run_calibration(self.host, self.port, self.busid)
+            except ScanError as err:
+                self.last_error = str(err)
+                raise HomeAssistantError(str(err)) from err
+            finally:
+                self.scanning = False
+                self.async_update_listeners()
+                self.start_monitor()
+        self.calibration = cal
+        await self._store.async_save(cal)
+        self.async_update_listeners()

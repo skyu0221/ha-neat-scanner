@@ -35,3 +35,10 @@ scan:
       advanced: true
       selector:
         text:
+
+calibrate:
+  fields:
+    entry_id:
+      advanced: true
+      selector:
+        text:

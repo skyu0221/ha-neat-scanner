@@ -50,7 +50,16 @@ class Backend(Protocol):
 
 SCRIPT_DIR = os.path.join(os.path.dirname(__file__), "scripts")
 LINE_BYTES_300 = 2646  # one raw sensor line at the 300 dpi script (3 segments x 882)
-SEGMENT_ORDER = (2, 0, 1)  # byte phase -> left, middle, right segment
+SEGMENT_ORDER = (2, 0, 1)
+# script name -> (bytes per sensor line, dummy px at segment start, at end, native dpi)
+GEOMETRY = {
+    "c600": (5292, 40, 8, 600),
+    "c300": (2646, 20, 4, 300),
+    "d300": (2646, 20, 4, 300),
+    "s150": (1332, 13, 6, 150),
+    "g300": (2646, 20, 4, 300),
+}
+GRAY_MODES = {"g300"}  # one sensor line per image row instead of R, G, B lines  # byte phase -> left, middle, right segment
 CHUNK_UNIT = 12  # data counter register unit in bytes
 POLL_TIMEOUT = 180.0  # give up when no data arrives for this long (seconds)
 MAX_DELAY_MS = 2000
@@ -211,16 +220,45 @@ async def _finish_sheet(session: UsbIpSession, script: dict, more: bool) -> None
 class NeatBackend:
     """Neat protocol over USB/IP: replays captured register programs and decodes the stream."""
 
-    def __init__(self, max_sheets: int = 1, auto_crop: bool = True, duplex: bool = False) -> None:
+    def __init__(
+        self, max_sheets: int = 1, auto_crop: bool = True, duplex: bool = False,
+        calibration: dict | None = None, deskew: bool = False, rotate: bool = False,
+    ) -> None:
         self.max_sheets = max_sheets
         self.auto_crop = auto_crop
         self.duplex = duplex
+        self.calibration = calibration or {}
+        self.deskew = deskew
+        self.rotate = rotate
+
+    async def calibrate(self, session: UsbIpSession) -> dict:
+        """Scan a blank white sheet (double-sided pass) and return the white profiles."""
+        loop = asyncio.get_running_loop()
+        script = await loop.run_in_executor(None, _load_script, "d300")
+        if not (await _paper_flags(session))["paper"]:
+            raise ScanError("No paper in the feeder")
+        try:
+            raw = await _scan_sheet(session, script, first=True)
+        except ScanError:
+            await _finish_sheet(session, script, False)
+            raise
+        await _finish_sheet(session, script, False)
+
+        def build() -> dict:
+            front, back = split_duplex(raw)
+            return {
+                "front": white_profile(front, "d300"),
+                "back": white_profile(back, "d300", mirror=True),
+                "created": datetime.now().isoformat(timespec="seconds"),
+            }
+
+        return await loop.run_in_executor(None, build)
 
     async def scan(self, session: UsbIpSession, dpi: int, color: str) -> list[Page]:
         loop = asyncio.get_running_loop()
         if self.duplex and dpi > 300:
             raise ScanError("Double-sided scanning supports up to 300 dpi")
-        name = "d300" if self.duplex else ("c600" if dpi > 300 else "c300")
+        name = _mode_for(dpi, self.duplex, color)
         script = await loop.run_in_executor(None, _load_script, name)
         pages: list[Page] = []
         if not (await _paper_flags(session))["paper"]:
@@ -233,18 +271,39 @@ class NeatBackend:
                 raise
             more = sheet + 1 < self.max_sheets and (await _paper_flags(session))["paper"]
             await _finish_sheet(session, script, more)
-            if len(raw) // (LINE_BYTES_300 * (6 if self.duplex else 3) * (2 if dpi > 300 else 1)) < 8:
+            line = GEOMETRY[name][0]
+            lines = 6 if self.duplex else (1 if name in GRAY_MODES else 3)
+            if len(raw) // (line * lines) < 8:
                 if sheet == 0:
                     raise ScanError("The scanner returned too little data (is paper loaded in the feeder?)")
                 break  # feeder empty: done
             if self.duplex:
-                pages += await loop.run_in_executor(None, decode_duplex, raw, dpi, color, self.auto_crop)
+                pages += await loop.run_in_executor(
+                    None, decode_duplex, raw, dpi, color, self.auto_crop, self.calibration, self.deskew,
+                    self.rotate,
+                )
             else:
-                pages.append(await loop.run_in_executor(None, decode_page, raw, dpi, color, self.auto_crop))
+                pages.append(await loop.run_in_executor(
+                    None, lambda: decode_page(
+                        raw, dpi, color, self.auto_crop, mode=name,
+                        calibration=self.calibration.get("front"), deskew=self.deskew, rotate=self.rotate,
+                    )
+                ))
             del raw
             if not more:
                 break
         return pages
+
+
+def _mode_for(dpi: int, duplex: bool = False, color: str = "color") -> str:
+    """Pick the captured scan program that is closest to (and not below) the requested dpi."""
+    if duplex:
+        return "d300"
+    if dpi > 300:
+        return "c600"
+    if color in ("grayscale", "bw"):
+        return "g300"  # a third of the data of colour, so faster
+    return "s150" if dpi <= 150 else "c300"
 
 
 def _smooth(x, k: int):
@@ -258,36 +317,237 @@ def _smooth(x, k: int):
     return ((c[k:] - c[:-k]) / k).astype(np.float32)
 
 
-def decode_page(raw: bytes, dpi: int, color: str, auto_crop: bool = True, mirror: bool = False) -> Page:
-    """Turn the raw sensor stream into an image (blocking; run in an executor).
+def _assemble(raw: bytes, mode: str, mirror: bool = False):
+    """Sensor stream -> image array (rows, width, 3) before any level correction.
 
-    The CIS has three segments that are read out in parallel and interleaved byte by
-    byte; three consecutive lines are the R, G and B lines of one image row.
+    The CIS has three segments that are read out in parallel and interleaved byte by byte;
+    three consecutive lines are the R, G and B lines of one image row (gray: one line).
+    """
+    import numpy as np
+
+    line, lead, trail, _base = GEOMETRY[mode]
+    nl = 1 if mode in GRAY_MODES else 3  # sensor lines per image row
+    seg = line // 3
+    rows = len(raw) // line // nl
+    if rows < 8:
+        raise ScanError("The scanner returned too little data (is paper loaded in the feeder?)")
+    g = np.frombuffer(raw, dtype=np.uint8, count=rows * nl * line).reshape(rows, nl, seg, 3)
+    parts = [g[:, :, lead : seg - trail, tap] for tap in SEGMENT_ORDER]
+    img = np.concatenate(parts, axis=2).transpose(0, 2, 1)[::-1, ::-1]  # (rows, width, RGB or 1)
+    if nl == 1:
+        img = np.repeat(img, 3, axis=2)
+    if mirror:  # the back sensor looks at the sheet from the other side
+        img = img[:, ::-1]
+    return img
+
+
+CAL_WIDTH = 2574  # columns of the 300 dpi color scan: calibration profiles are stored at this width
+CAL_MIN_WHITE = 200  # a usable white reference: at least this bright over most of the width
+
+
+def white_profile(raw: bytes, mode: str, mirror: bool = False) -> list:
+    """Per column white level (RGB) of a scan of a blank white sheet, at the 300 dpi color width."""
+    import numpy as np
+
+    img = _assemble(raw, mode, mirror)
+    rows = img.shape[0]
+    mid = img[rows // 5 : rows * 4 //5 : 2].astype(np.float32)
+    prof = np.median(mid, axis=0)  # (width, 3)
+    ok = (prof.mean(axis=1) > CAL_MIN_WHITE).mean()
+    if ok < 0.85:
+        raise ScanError(
+            "Calibration needs a clean blank white letter-size sheet that covers the full width "
+            f"(only {ok:.0%} of the columns were bright enough)"
+        )
+    x = np.linspace(0, prof.shape[0] - 1, CAL_WIDTH)
+    prof = np.stack([np.interp(x, np.arange(prof.shape[0]), prof[:, c]) for c in range(3)], axis=1)
+    return np.round(prof, 1).tolist()
+
+
+def _reference(cal: list, width: int, mode: str):
+    """Calibration profile resampled to ``width`` columns (gray modes use the luminance)."""
+    import numpy as np
+
+    p = np.asarray(cal, np.float32)
+    if mode in GRAY_MODES:
+        p = np.repeat(p.mean(axis=1, keepdims=True), 3, axis=1)
+    if width != len(p):
+        x = np.linspace(0, len(p) - 1, width)
+        p = np.stack([np.interp(x, np.arange(len(p)), p[:, c]) for c in range(3)], axis=1)
+    return _smooth(p, 3)
+
+
+MAX_SKEW = 5.0  # degrees searched by the deskew step
+ORIENT_MIN = 0.2  # |orientation score| needed before a page is turned upside down
+
+
+def _text_mask(img, max_side: int = 1000):
+    """Small binary image (dark = 1) of the page content for skew estimation."""
+    import numpy as np
+    from PIL import Image
+
+    g = img.convert("L")
+    f = min(1.0, max_side / max(g.size))
+    if f < 1.0:
+        g = g.resize((max(1, int(g.width * f)), max(1, int(g.height * f))), Image.Resampling.BOX)
+    a = np.asarray(g, dtype=np.float32)
+    paper = np.percentile(a, 80)
+    return (a < 0.7 * paper).astype(np.float32), f
+
+
+def estimate_skew(img) -> float:
+    """Skew angle in degrees (counter-clockwise positive: rotate the image by -angle to fix).
+
+    Projection profile: when the text lines are horizontal the row sums are the most uneven.
+    Returns 0.0 when there is not enough text to be sure.
     """
     import numpy as np
     from PIL import Image
 
-    scale = 2 if dpi > 300 else 1
-    line = LINE_BYTES_300 * scale
-    seg = line // 3
-    rows = len(raw) // line // 3
-    if rows < 8:
-        raise ScanError("The scanner returned too little data (is paper loaded in the feeder?)")
-    g = np.frombuffer(raw, dtype=np.uint8, count=rows * 3 * line).reshape(rows, 3, seg, 3)
-    lead, trail = 20 * scale, 4 * scale
-    parts = [g[:, :, lead : seg - trail, tap] for tap in SEGMENT_ORDER]
-    img = np.concatenate(parts, axis=2).transpose(0, 2, 1)[::-1, ::-1]  # (rows, width, RGB)
-    if mirror:  # the back sensor looks at the sheet from the other side
-        img = img[:, ::-1]
-    width = img.shape[1]
+    mask, _f = _text_mask(img)
+    if mask.sum() < 200:
+        return 0.0
+    m = Image.fromarray((mask * 255).astype(np.uint8))
 
-    # Per column white level (flat-field): the driver calibrates in hardware, we estimate it.
-    sample = img[:: max(1, rows // 400)].astype(np.float32)
-    white = _smooth(np.percentile(sample, 90, axis=0), 31 * scale)  # (width, 3)
-    lum = white.mean(axis=1)
-    paper = lum > 0.45 * lum.max()
-    gain = np.ones((width, 3), np.float32)
-    gain[paper] = np.clip(245.0 / np.maximum(white[paper], 1.0), 0.8, 2.5)
+    def score(angle: float) -> float:
+        r = np.asarray(m.rotate(angle, resample=Image.Resampling.NEAREST, expand=False), dtype=np.float32)
+        prof = r.sum(axis=1)
+        return float(np.sum(np.diff(prof) ** 2))
+
+    coarse = [(score(a), a) for a in np.arange(-MAX_SKEW, MAX_SKEW + 1e-6, 0.5)]
+    best = max(coarse)[1]
+    fine = [(score(a), a) for a in np.arange(best - 0.5, best + 0.5 + 1e-6, 0.1)]
+    s_best, a_best = max(fine)
+    s_zero = score(0.0)
+    typical = float(np.median([c[0] for c in coarse]))
+    if s_best < 1.1 * typical or abs(a_best) < 0.15 or s_best < 1.02 * s_zero:
+        return 0.0
+    return float(a_best)
+
+
+def orientation_score(img) -> float:
+    """Positive: text is upright, negative: upside down, near 0: unknown.
+
+    In Latin text there is more ink above the main text band (ascenders, capitals) than below
+    the baseline (descenders), so the row profile of each text line is lopsided.
+    """
+    import numpy as np
+
+    mask, _f = _text_mask(img, 1800)
+    p = mask.sum(axis=1)
+    if p.max() < 5:
+        return 0.0
+    k = 3
+    ps = np.convolve(p, np.ones(k) / k, mode="same")
+    on = ps > 0.12 * np.percentile(ps, 95)
+    up = down = 0.0
+    lines = 0
+    i, n = 0, len(on)
+    while i < n:
+        if not on[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and on[j]:
+            j += 1
+        q = p[i:j]
+        if 6 <= len(q) <= 80 and q.max() > 0:
+            core = np.where(q >= 0.5 * q.max())[0]
+            up += q[: core[0]].sum()
+            down += q[core[-1] + 1 :].sum()
+            lines += 1
+        i = j
+    if lines < 8 or up + down < 1:
+        return 0.0
+    return float((up - down) / (up + down))
+
+
+def trim_to_paper(img):
+    """Crop away the dark background wedges left after rotating a skewed sheet."""
+    import numpy as np
+    from PIL import Image
+
+    g = img.convert("L")
+    f = min(1.0, 800 / max(g.size))
+    sm = g.resize((max(1, int(g.width * f)), max(1, int(g.height * f))), Image.Resampling.BOX) if f < 1 else g
+    a = np.asarray(sm, dtype=np.float32)
+    paper = a > 0.7 * np.percentile(a, 90)
+    cols = np.where(paper.mean(axis=0) > 0.5)[0]
+    rows = np.where(paper.mean(axis=1) > 0.5)[0]
+    if len(cols) < 8 or len(rows) < 8:
+        return img
+    box = (int(cols[0] / f), int(rows[0] / f), int((cols[-1] + 1) / f), int((rows[-1] + 1) / f))
+    return img.crop(box)
+
+
+def deskew_image(img):
+    """Straighten a slightly rotated page (blocking)."""
+    from PIL import Image
+
+    angle = estimate_skew(img)
+    if angle == 0.0:
+        return img
+    _LOGGER.debug("Deskew by %.1f degrees", angle)
+    rotated = img.rotate(angle, resample=Image.Resampling.BICUBIC, expand=True, fillcolor=(40, 40, 40))
+    return trim_to_paper(rotated)
+
+
+def decode_page(
+    raw: bytes, dpi: int, color: str, auto_crop: bool = True, mirror: bool = False,
+    mode: str | None = None, calibration: list | None = None, deskew: bool = False,
+    rotate: bool = False,
+) -> Page:
+    """Turn the raw sensor stream into an image (blocking; run in an executor).
+
+    ``calibration`` is a white profile (see ``white_profile``) for this side of the sheet. Without
+    one the white level per column is estimated from the page itself.
+    """
+    import numpy as np
+    from PIL import Image
+
+    mode = mode or _mode_for(dpi)
+    base = GEOMETRY[mode][3]
+    scale = base / 300
+    img = _assemble(raw, mode, mirror)
+    rows, width = img.shape[:2]
+
+    # Per column white level (flat-field): the driver calibrates in hardware, we use a stored
+    # white sheet scan or estimate it from the page.
+    if calibration:
+        white = _reference(calibration, width, mode)
+        sample = img[:: max(1, rows // 400)].astype(np.float32)
+        # 97th percentile: a skewed sheet covers a column over only part of its length. Columns
+        # whose white reference is dim (the sensor edge) read the same with and without paper.
+        norm = np.percentile(sample, 97, axis=0) / np.maximum(white, 1.0)
+        paper = (norm.mean(axis=1) > 0.7) & (white.mean(axis=1) > CAL_MIN_WHITE)
+        gain = np.clip(245.0 / np.maximum(white, 1.0), 0.7, 3.0).astype(np.float32)
+        # The white sheet saturates in some sensor segments (the true level is unknown there), so
+        # level the three segments against each other using the page's own white.
+        white90 = np.percentile(sample, 90, axis=0) / np.maximum(white, 1.0)  # (width, 3)
+        edges = [0, width // 3, 2 * width // 3, width]
+        levels = []
+        for k in range(3):
+            cols = np.where(paper[edges[k] : edges[k + 1]])[0] + edges[k]
+            levels.append(np.median(white90[cols], axis=0) if len(cols) >= 40 else None)
+        have = [lv for lv in levels if lv is not None]
+        if have:
+            ref = np.median(np.stack(have), axis=0)
+            if len(have) >= 2:
+                for k, lv in enumerate(levels):
+                    if lv is not None:
+                        ratio = ref / np.maximum(lv, 0.05)
+                        if np.all(np.abs(ratio - 1) < 0.2):
+                            gain[edges[k] : edges[k + 1]] *= ratio.astype(np.float32)
+            if np.all((ref > 0.75) & (ref < 1.1)):  # the page's own paper is the white point
+                gain /= ref.astype(np.float32)
+    else:
+        sample = img[:: max(1, rows // 400)].astype(np.float32)
+        white = _smooth(np.percentile(sample, 90, axis=0), max(5, int(31 * scale)) | 1)  # (width, 3)
+        lum = white.mean(axis=1)
+        lum97 = _smooth(np.percentile(sample, 97, axis=0), max(5, int(31 * scale)) | 1).mean(axis=1)
+        paper = lum97 > 0.7 * lum97.max()
+        gain = np.ones((width, 3), np.float32)
+        gain[paper] = np.clip(245.0 / np.maximum(white[paper], 1.0), 0.8, 2.5)
     c0, c1 = (int(np.argmax(paper)), int(width - np.argmax(paper[::-1]))) if paper.any() else (0, width)
     if not auto_crop:
         c0, c1 = 0, width
@@ -301,10 +561,13 @@ def decode_page(raw: bytes, dpi: int, color: str, auto_crop: bool = True, mirror
         rowlum = out[:, :: max(1, (c1 - c0) // 200)].mean(axis=(1, 2))
         ok = np.where(rowlum > 0.5 * np.percentile(rowlum, 90))[0]
         if len(ok) > 8:
-            m = 4 * scale
+            m = max(2, int(4 * scale))
             r0, r1 = max(0, int(ok[0]) - m), min(rows, int(ok[-1]) + 1 + m)
     img_out = Image.fromarray(np.ascontiguousarray(out[r0:r1]), "RGB")
-    base = 600 if dpi > 300 else 300
+    if deskew:
+        img_out = deskew_image(img_out)
+    if rotate and orientation_score(img_out) <= -ORIENT_MIN:
+        img_out = img_out.transpose(Image.Transpose.ROTATE_180)
     if dpi != base:
         factor = dpi / base
         img_out = img_out.resize(
@@ -318,30 +581,39 @@ def decode_page(raw: bytes, dpi: int, color: str, auto_crop: bool = True, mirror
     return Page(img_out.width, img_out.height, img_out.mode, img_out.tobytes())
 
 
-def decode_duplex(raw: bytes, dpi: int, color: str, auto_crop: bool = True) -> list[Page]:
-    """Split a duplex stream (6 lines per row: 3 lines of one side, then 3 of the other)."""
+def split_duplex(raw: bytes) -> tuple[bytes, bytes]:
+    """Duplex stream -> (front, back) raw single-sided streams."""
     import numpy as np
 
-    line = LINE_BYTES_300 * (2 if dpi > 300 else 1)
+    line = GEOMETRY["d300"][0]
     groups = len(raw) // line // 6
     if groups < 8:
         raise ScanError("The scanner returned too little data (is paper loaded in the feeder?)")
     g = np.frombuffer(raw, dtype=np.uint8, count=groups * 6 * line).reshape(groups, 6, line)
-    front = np.ascontiguousarray(g[:, 3:6]).tobytes()
-    back = np.ascontiguousarray(g[:, 0:3]).tobytes()
+    return np.ascontiguousarray(g[:, 3:6]).tobytes(), np.ascontiguousarray(g[:, 0:3]).tobytes()
+
+
+def decode_duplex(
+    raw: bytes, dpi: int, color: str, auto_crop: bool = True, calibration: dict | None = None,
+    deskew: bool = False, rotate: bool = False,
+) -> list[Page]:
+    """Split a duplex stream (6 lines per row: 3 lines of one side, then 3 of the other)."""
+    front, back = split_duplex(raw)
+    cal = calibration or {}
     return [
-        decode_page(front, dpi, color, auto_crop),
-        decode_page(back, dpi, color, auto_crop, mirror=True),
+        decode_page(front, dpi, color, auto_crop, mode="d300", calibration=cal.get("front"), deskew=deskew, rotate=rotate),
+        decode_page(back, dpi, color, auto_crop, mirror=True, mode="d300", calibration=cal.get("back"), deskew=deskew, rotate=rotate),
     ]
 
 
 async def run_scan(
     host: str, port: int, busid: str, dpi: int, color: str,
     backend: Backend | None = None, max_sheets: int = 1, auto_crop: bool = True,
-    duplex: bool = False,
+    duplex: bool = False, calibration: dict | None = None, deskew: bool = False,
+    rotate: bool = False,
 ) -> list[Page]:
     """Import the remote scanner, scan the ADF and return the pages."""
-    backend = backend or NeatBackend(max_sheets, auto_crop, duplex)
+    backend = backend or NeatBackend(max_sheets, auto_crop, duplex, calibration, deskew, rotate)
     for attempt in (1, 2):
         try:
             async with UsbIpSession(host, busid, port) as session:
@@ -380,3 +652,19 @@ def save_pages(pages: list[Page], directory: str, fmt: str, prefix: str = "scan"
         (img.convert("RGB") if ext == "jpg" else img).save(path)
         paths.append(path)
     return paths
+
+
+async def run_calibration(host: str, port: int, busid: str) -> dict:
+    """Import the scanner and measure the white reference from a blank white sheet."""
+    for attempt in (1, 2):
+        try:
+            async with UsbIpSession(host, busid, port) as session:
+                return await NeatBackend().calibrate(session)
+        except UsbIpError as err:
+            raise ScanError(str(err)) from err
+        except ScanError as err:
+            if attempt == 1 and "status=-32" in str(err) and re.search(r"step [01]/", str(err)):
+                await asyncio.sleep(SESSION_SETTLE)
+                continue
+            raise
+    raise ScanError("unreachable")

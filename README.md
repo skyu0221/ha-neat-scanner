@@ -17,6 +17,9 @@ standard `usbipd` server.
 - **Double-sided scanning** (switch, option and `duplex` service field): each sheet gives a front
   page followed by a back page, up to 300 dpi
 - Online/offline binary sensor (polls the USB/IP server and checks the scanner is exported)
+- **Calibrate** button and `neat_scanner.calibrate` service: scan a blank white letter sheet to level
+  the sensor segments (fixes a dim left edge and brightness steps between regions)
+- **Straighten skewed pages** (default on) and an experimental **upside-down** correction (default off)
 - Scan button plus **DPI** (any value from 75 to 600) and **color mode** (color/grayscale/black and white) selectors
 - `neat_scanner.scan` service with `dpi`, `color`, `format` (png/jpeg/pdf) and `save_dir`
 - Configurable save directory, default settings and polling interval (integration options)
@@ -49,9 +52,13 @@ homeassistant:
 
 ## Scanning notes
 
-- The scanner natively runs 300 and 600 dpi color scans. Other DPI values are resampled from
-  those (up to 300 uses the 300 dpi scan, above 300 the 600 dpi scan). Grayscale and black and
-  white are converted in software.
+- Native programs: 600 dpi color, 300 dpi color, 150 dpi color and 300 dpi grayscale. Other DPI
+  values are resampled from the closest one (up to 150 color uses the 150 dpi scan, grayscale and
+  black and white use the faster 300 dpi gray scan, above 300 the 600 dpi scan).
+- **Calibration**: put a blank white letter-size sheet in the feeder and press *Calibrate* (about a
+  minute; it scans both sides). The white level of every sensor column is stored in Home Assistant
+  and used for all later scans. This is a software calibration; the scanner's own shading tables
+  (see docs/PROTOCOL.md) are still the ones captured from the Windows driver.
 - A scan call feeds **every sheet in the feeder** (up to the `sheets` option, default 50) and
   produces one image per sheet; it stops when the paper sensor reports an empty feeder. Load the
   whole stack at once, like with the Windows driver. Between sheets the driver skips the eject
@@ -59,7 +66,7 @@ homeassistant:
 - A 300 dpi receipt takes about 45 seconds, 600 dpi about 90 seconds
   (mostly the USB/IP link and the scanner's own warm-up).
 - Letter size works: the sensor always scans the full 8.8 in width and the page is cropped
-  automatically to the paper. There is no deskew yet.
+  automatically to the paper and straightened (skew up to 5 degrees).
 - The sensor monitor keeps one USB/IP connection open (needed to catch the 0.5 s button pulse).
   It pauses during scans; turn it off in the options if you need to share the scanner with
   another computer.
@@ -68,5 +75,6 @@ homeassistant:
 ## Roadmap
 
 - [x] Neat scan protocol (replayed register programs, see docs/PROTOCOL.md)
-- [ ] Native 150/200 dpi and grayscale programs, multi-page ADF feeding, auto crop
+- [x] Native 150 dpi color and 300 dpi gray, multi-page ADF feeding, auto crop, deskew
+- [ ] Hardware calibration (shading tables and AFE gain/offset, needs a capture of the Neat app)
 - [ ] Direct USB connection (no USB/IP) — TODO
