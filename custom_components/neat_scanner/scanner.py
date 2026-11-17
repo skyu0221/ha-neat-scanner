@@ -184,7 +184,10 @@ async def _scan_sheet(session: UsbIpSession, script: dict, first: bool) -> bytes
                     break
                 if loop.time() - last_data > limit:
                     if first:
-                        raise ScanError("Timed out waiting for scan data (no paper in the feeder?)")
+                        raise ScanError(
+                            "Timed out waiting for scan data. If the scanner light keeps blinking, unplug the "
+                            "scanner, plug it in again and re-share it in USBAnywhere, then retry."
+                        )
                     break
                 await asyncio.sleep(0.05)
     except ScanError as err:
