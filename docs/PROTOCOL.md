@@ -137,6 +137,29 @@ Native modes in the INI: 600/300/200/150/75 dpi, color and gray, front and back.
 - The sensor edge: the first ~45 columns read about 155 for both white paper and no paper, and the
   back sensor is dark at its far end; those columns are excluded from the paper area.
 
+## Calibration capture (Neat app, round 4, partly decoded)
+
+The app's *cleaning* feeds a sheet through without reading data. *Calibration* then runs one block
+per scan mode, in this order: 300 dpi color (front and back), 600 dpi color (front and back),
+300 dpi gray, 600 dpi gray. Each block is:
+
+1. several short scans (`3f=01`, about 16 rows, bulk IN 127488 bytes) with different exposure values
+   (registers `0x10..0x15`) and 510-byte bulk OUT tables, probably dark/AFE and exposure tuning;
+2. a long white read (about 480 rows, 3.8 MB at 300 dpi color);
+3. upload of **new shading tables** (color: 6 tables of 11956 bytes at 300 dpi, 22708 at 600 dpi,
+   back first then front; gray: 2 tables) and a small table of 56/28/34 bytes;
+4. a verification read (about 400 rows) with the new tables, `reg 0x01` = `0x61`.
+
+Results seen: final exposure `R=0x0313 G=0x0323 B=0x01a2` and `reg 0x21 = 0x1c` for 300 dpi color, against
+`0x0323 0x0323 0x01b6` and `0x81` in the older single-sided scan script. The three tables of one set are
+the same shape with a different per-channel scale; the new gain words average about 7400 against
+about 21000 in the older tables (dark words about 7800 against 6500).
+
+Replacing only the tables, exposure and `0x21` of the old scan script with these values does **not** work
+(white reads about 150 instead of 250 and is uneven): the final scan program after a calibration changes
+more than that, and no scan after this calibration has been captured yet. USBPcap truncates large
+bulk IN transfers, so the white and dark data of the calibration cannot be taken from the capture.
+
 ## Open questions
 
 - Exact formulas for the computed registers and the width-dependent upload tables, so that any
