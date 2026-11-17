@@ -49,7 +49,8 @@ homeassistant:
   white are converted in software.
 - One scan call feeds one sheet; a 300 dpi receipt takes about 45 seconds, 600 dpi about 90 seconds
   (mostly the USB/IP link and the scanner's own warm-up).
-- The image is the full sensor width (882 px at 300 dpi); there is no auto crop or deskew yet.
+- Letter size works: the sensor always scans the full 8.8 in width and the page is cropped
+  automatically to the paper. There is no deskew yet.
 - If a scan is interrupted the scanner can stay stuck; unplug and replug it on the phone.
 
 ## Roadmap

@@ -45,7 +45,8 @@ class Backend(Protocol):
 
 
 SCRIPT_DIR = os.path.join(os.path.dirname(__file__), "scripts")
-LINE_BYTES_300 = 2646  # one raw sensor line at the 300 dpi script
+LINE_BYTES_300 = 2646  # one raw sensor line at the 300 dpi script (3 segments x 882)
+SEGMENT_ORDER = (2, 0, 1)  # byte phase -> left, middle, right segment
 CHUNK_UNIT = 12  # data counter register unit in bytes
 POLL_TIMEOUT = 180.0  # give up when no data arrives for this long (seconds)
 MAX_DELAY_MS = 2000
@@ -135,31 +136,73 @@ class NeatBackend:
         return [page]
 
 
-def decode_page(raw: bytes, dpi: int, color: str) -> Page:
-    """Turn the raw sensor stream into an image (blocking; run in an executor)."""
+def _smooth(x, k: int):
+    """Moving average along axis 0 (edge padded)."""
+    import numpy as np
+
+    pad = k // 2
+    xp = np.pad(x, ((pad, pad),) + ((0, 0),) * (x.ndim - 1), mode="edge")
+    c = np.cumsum(xp, axis=0, dtype=np.float64)
+    c = np.concatenate([np.zeros((1,) + c.shape[1:]), c])
+    return ((c[k:] - c[:-k]) / k).astype(np.float32)
+
+
+def decode_page(raw: bytes, dpi: int, color: str, auto_crop: bool = True) -> Page:
+    """Turn the raw sensor stream into an image (blocking; run in an executor).
+
+    The CIS has three segments that are read out in parallel and interleaved byte by
+    byte; three consecutive lines are the R, G and B lines of one image row.
+    """
     import numpy as np
     from PIL import Image
 
     scale = 2 if dpi > 300 else 1
-    px = 882 * scale
     line = LINE_BYTES_300 * scale
+    seg = line // 3
     rows = len(raw) // line // 3
     if rows < 8:
         raise ScanError("The scanner returned too little data (is paper loaded in the feeder?)")
-    g = np.frombuffer(raw, dtype=np.uint8, count=rows * 3 * line).reshape(rows, 3, px, 3)
-    phase = int(np.argmax([g[::25, :, :, i].mean() for i in range(3)]))
-    # One of every three bytes carries the sample; consecutive lines are R, G, B.
-    rgb = np.ascontiguousarray(g[:, :, :, phase].transpose(0, 2, 1)[::-1, ::-1])
-    img = Image.fromarray(rgb, "RGB")
+    g = np.frombuffer(raw, dtype=np.uint8, count=rows * 3 * line).reshape(rows, 3, seg, 3)
+    lead, trail = 20 * scale, 4 * scale
+    parts = [g[:, :, lead : seg - trail, tap] for tap in SEGMENT_ORDER]
+    img = np.concatenate(parts, axis=2).transpose(0, 2, 1)[::-1, ::-1]  # (rows, width, RGB)
+    width = img.shape[1]
+
+    # Per column white level (flat-field): the driver calibrates in hardware, we estimate it.
+    sample = img[:: max(1, rows // 400)].astype(np.float32)
+    white = _smooth(np.percentile(sample, 90, axis=0), 31 * scale)  # (width, 3)
+    lum = white.mean(axis=1)
+    paper = lum > 0.45 * lum.max()
+    gain = np.ones((width, 3), np.float32)
+    gain[paper] = np.clip(245.0 / np.maximum(white[paper], 1.0), 0.8, 2.5)
+    c0, c1 = (int(np.argmax(paper)), int(width - np.argmax(paper[::-1]))) if paper.any() else (0, width)
+    if not auto_crop:
+        c0, c1 = 0, width
+    out = np.empty((rows, c1 - c0, 3), np.uint8)
+    step = 512
+    for r0 in range(0, rows, step):
+        blk = img[r0 : r0 + step, c0:c1].astype(np.float32) * gain[c0:c1]
+        out[r0 : r0 + step] = np.clip(blk, 0, 255).astype(np.uint8)
+    r0, r1 = 0, rows
+    if auto_crop:
+        rowlum = out[:, :: max(1, (c1 - c0) // 200)].mean(axis=(1, 2))
+        ok = np.where(rowlum > 0.5 * np.percentile(rowlum, 90))[0]
+        if len(ok) > 8:
+            m = 4 * scale
+            r0, r1 = max(0, int(ok[0]) - m), min(rows, int(ok[-1]) + 1 + m)
+    img_out = Image.fromarray(np.ascontiguousarray(out[r0:r1]), "RGB")
     base = 600 if dpi > 300 else 300
     if dpi != base:
         factor = dpi / base
-        img = img.resize((round(img.width * factor), round(img.height * factor)), Image.Resampling.BOX)
+        img_out = img_out.resize(
+            (max(1, round(img_out.width * factor)), max(1, round(img_out.height * factor))),
+            Image.Resampling.BOX,
+        )
     if color in ("grayscale", "bw"):
-        img = img.convert("L")
+        img_out = img_out.convert("L")
         if color == "bw":
-            img = img.point(lambda v: 255 if v >= 128 else 0).convert("1")
-    return Page(img.width, img.height, img.mode, img.tobytes())
+            img_out = img_out.point(lambda v: 255 if v >= 128 else 0).convert("1")
+    return Page(img_out.width, img_out.height, img_out.mode, img_out.tobytes())
 
 
 async def run_scan(

@@ -30,17 +30,30 @@ bulk OUT `0x02`, interrupt IN `0x83` (unused in the capture).
    `0xfd..`, `0x41`. The final chunk is shorter (e.g. `0xD90E`).
 6. Stop sequence: register writes, GPIO writes, motor park.
 
-## Image data (verified on hardware)
+## Image data (verified against Windows output)
 
-- Raw 8 bit stream, **2646 bytes per line at 300 dpi** (5292 at 600 dpi) = 882 (1764) pixels x 3 bytes.
-- Only **one byte of every three** carries the sample (the other two are about 0); pick the
-  phase with the highest mean.
+- The CIS has **three segments of 882 px** (full width 2646 px = 8.82 in at 300 dpi; 5292 at 600 dpi)
+  that are read out in parallel and **interleaved byte by byte**: `line[3*i + t]` is pixel `i` of
+  tap `t`. Tap to position: tap 2 = left, tap 0 = middle, tap 1 = right.
+- Each segment has about 20 dummy (zero) pixels at the start and 3 falling-edge pixels at the
+  end; about 860 pixels are valid (`SectorDummy=860,...`).
 - **Three consecutive lines are the R, G and B lines** of one image row (`rows = lines / 3`).
 - The image is rotated by 180 degrees.
+- The sensor always scans the full width. A receipt only covers the middle segment, a letter
+  page all three. Cropping to the paper is software (the driver has auto crop, deskew, rotate).
+- Raw levels are not flat: the three segments have different gain, so a per column white level
+  correction is needed (the driver uses calibration data; we estimate it from the page).
 - The data counter in registers `0x42..0x45` (big endian, unit 12 bytes) is the number of bytes
   waiting in scanner RAM; register `0x40 & 0xC0 == 0xC0` means the scan finished.
-- The black and white capture is truncated by USBPcap (65535 byte snaplen) so its layout was not
-  used; black and white is derived from the color scan.
+- Letter and receipt scans use identical register programs and upload tables (verified).
+- The earlier black and white capture is truncated by USBPcap (65535 byte snaplen).
+
+## Inputs and buttons (round 2 capture)
+
+- No interrupt IN (`0x83`) traffic was ever seen; the scanner is polled with control transfers.
+- `GPIO 0x21` (`c0 0c 8e 00 21 00 01 00`, 1 byte): `0x40` seen when paper was loaded in the feeder
+  before a scan, `0x04` pulses right after each scan ends. The Neat app polls it about once a second.
+- Registers `0x0a`, `0x40` and `0x6c` bits that change are host driven (written by the host).
 
 ## Driver configuration (from the Neat ADF scanner driver, v3.0.4.0 / MSI 2014)
 
