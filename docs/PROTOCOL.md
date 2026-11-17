@@ -48,6 +48,20 @@ bulk OUT `0x02`, interrupt IN `0x83` (unused in the capture).
 - Letter and receipt scans use identical register programs and upload tables (verified).
 - The earlier black and white capture is truncated by USBPcap (65535 byte snaplen).
 
+## Sensors (verified live with a monitor)
+
+- Feeder paper: `r40 & 0x80 == 0 and r41 & 0x08 == 0` means **paper present** (both bits are 1
+  when empty: `r40=0xf0 r41=0xdc` empty, `0x70 / 0xd4` with paper). One sheet and three sheets
+  read the same.
+- Cover: `r40 & 0x20` set = closed (clears briefly while it is opened and closed).
+- Button: `GPIO 0x21` (request `0x0C`, value `0x8E`, index `0x21`) bit `0x08`, a pulse of about
+  0.5 s, so it has to be polled faster than every 0.3 s.
+- With several sheets loaded the scanner pulls the next sheet in half way and then stalls
+  without setting the finished bits (`r40 & 0xC0 == 0xC0`). The data counter stops changing, so
+  four seconds without change after data arrived means the sheet is complete. After the stop
+  sequence the next full scan program feeds the waiting sheet. The paper sensor still reads
+  "paper" after sheet 1 when sheet 2 waits and "empty" after the last one.
+
 ## Inputs and buttons (round 2 capture)
 
 - No interrupt IN (`0x83`) traffic was ever seen; the scanner is polled with control transfers.

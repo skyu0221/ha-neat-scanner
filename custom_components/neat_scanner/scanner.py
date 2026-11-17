@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import struct
 from dataclasses import dataclass
@@ -17,6 +18,8 @@ from datetime import datetime
 from typing import Protocol
 
 from .usbip_client import UsbIpError, UsbIpSession
+
+_LOGGER = logging.getLogger(__name__)
 
 EP_IN = 0x81
 EP_OUT = 0x02
@@ -50,6 +53,8 @@ SEGMENT_ORDER = (2, 0, 1)  # byte phase -> left, middle, right segment
 CHUNK_UNIT = 12  # data counter register unit in bytes
 POLL_TIMEOUT = 180.0  # give up when no data arrives for this long (seconds)
 MAX_DELAY_MS = 2000
+STALL_SECS = 4.0  # data counter unchanged this long after data arrived: the sheet is complete
+NEXT_SHEET_TIMEOUT = 25.0  # after the first sheet: no data for this long means the feeder is empty
 
 
 def _load_script(name: str) -> dict:
@@ -94,46 +99,94 @@ async def _poll_counter(session: UsbIpSession) -> tuple[int, int]:
     return d[0], int.from_bytes(d[2:6], "big") * CHUNK_UNIT
 
 
+async def _paper_flags(session: UsbIpSession) -> dict:
+    """Read the sensor bits: paper at the feeder, cover closed, button (pulse)."""
+    d = await session.control(0xC0, 0x04, 0x8E, 0x4022, 4, timeout=5)
+    g = await session.control(0xC0, 0x0C, 0x8E, 0x21, 1, timeout=5)
+    return {
+        "paper": not (d[0] & 0x80 or d[1] & 0x08),  # both bits are 1 when the feeder is empty
+        "cover_closed": bool(d[0] & 0x20),
+        "button": bool(g[0] & 0x08),
+        "raw": (d[0], d[1], g[0]),
+    }
+
+
+async def _scan_sheet(session: UsbIpSession, script: dict, first: bool) -> bytes:
+    """Feed and scan one sheet; returns the raw sensor stream (may be empty after the last sheet)."""
+    loop = asyncio.get_running_loop()
+    chunk = script["chunk"]
+    raw = bytearray()
+    scan_error: Exception | None = None
+    limit = POLL_TIMEOUT if first else NEXT_SHEET_TIMEOUT
+    try:
+        await _play(session, script["prelude"])
+        last_data = loop.time()
+        polls = 0
+        last_avail, last_change = -1, loop.time()
+        while True:
+            status, avail = await _poll_counter(session)
+            finished = (status & 0xC0) == 0xC0
+            polls += 1
+            if polls % 20 == 1 or finished:
+                _LOGGER.info("scan poll: status=%02x avail=%d read=%d", status, avail, len(raw))
+            if avail != last_avail:
+                last_avail, last_change = avail, loop.time()
+            if avail >= chunk:
+                raw += await _read_chunk(session, chunk)
+                last_data = last_change = loop.time()
+                last_avail = -1
+            else:
+                stalled = (raw or avail) and loop.time() - last_change > STALL_SECS
+                if finished or stalled:
+                    if stalled and not finished:
+                        _LOGGER.info("scan stalled (next sheet waiting?): treating sheet as complete")
+                    if avail:
+                        raw += await _read_chunk(session, avail)
+                    break
+                if loop.time() - last_data > limit:
+                    if first:
+                        raise ScanError("Timed out waiting for scan data (no paper in the feeder?)")
+                    break
+                await asyncio.sleep(0.05)
+    except ScanError as err:
+        scan_error = err
+    except UsbIpError as err:
+        scan_error = ScanError(f"USB/IP error during scan: {err}")
+    finally:
+        try:  # always try to park the motor / stop the scan
+            await _play(session, script["tail"], timeout=10)
+        except UsbIpError:
+            pass
+    if scan_error:
+        raise scan_error
+    return bytes(raw)
+
+
 class NeatBackend:
     """Neat protocol over USB/IP: replays captured register programs and decodes the stream."""
+
+    def __init__(self, max_sheets: int = 1, auto_crop: bool = True) -> None:
+        self.max_sheets = max_sheets
+        self.auto_crop = auto_crop
 
     async def scan(self, session: UsbIpSession, dpi: int, color: str) -> list[Page]:
         loop = asyncio.get_running_loop()
         name = "c600" if dpi > 300 else "c300"
         script = await loop.run_in_executor(None, _load_script, name)
-        chunk = script["chunk"]
-        raw = bytearray()
-        scan_error: Exception | None = None
-        try:
-            await _play(session, script["prelude"])
-            last_data = loop.time()
-            while True:
-                status, avail = await _poll_counter(session)
-                finished = (status & 0xC0) == 0xC0
-                if avail >= chunk:
-                    raw += await _read_chunk(session, chunk)
-                    last_data = loop.time()
-                elif finished:
-                    if avail:
-                        raw += await _read_chunk(session, avail)
-                    break
-                else:
-                    if loop.time() - last_data > POLL_TIMEOUT:
-                        raise ScanError("Timed out waiting for scan data (no paper in the feeder?)")
-                    await asyncio.sleep(0.05)
-        except ScanError as err:
-            scan_error = err
-        except UsbIpError as err:
-            scan_error = ScanError(f"USB/IP error during scan: {err}")
-        finally:
-            try:  # always try to park the motor / stop the scan
-                await _play(session, script["tail"], timeout=10)
-            except UsbIpError:
-                pass
-        if scan_error:
-            raise scan_error
-        page = await loop.run_in_executor(None, decode_page, bytes(raw), dpi, color)
-        return [page]
+        pages: list[Page] = []
+        if not (await _paper_flags(session))["paper"]:
+            raise ScanError("No paper in the feeder")
+        for sheet in range(self.max_sheets):
+            raw = await _scan_sheet(session, script, first=sheet == 0)
+            if len(raw) // (LINE_BYTES_300 * 3 * (2 if dpi > 300 else 1)) < 8:
+                if sheet == 0:
+                    raise ScanError("The scanner returned too little data (is paper loaded in the feeder?)")
+                break  # feeder empty: done
+            pages.append(await loop.run_in_executor(None, decode_page, raw, dpi, color, self.auto_crop))
+            del raw
+            if not (await _paper_flags(session))["paper"]:
+                break  # feeder empty
+        return pages
 
 
 def _smooth(x, k: int):
@@ -207,10 +260,10 @@ def decode_page(raw: bytes, dpi: int, color: str, auto_crop: bool = True) -> Pag
 
 async def run_scan(
     host: str, port: int, busid: str, dpi: int, color: str,
-    backend: Backend | None = None,
+    backend: Backend | None = None, max_sheets: int = 1, auto_crop: bool = True,
 ) -> list[Page]:
     """Import the remote scanner, scan the ADF and return the pages."""
-    backend = backend or NeatBackend()
+    backend = backend or NeatBackend(max_sheets, auto_crop)
     try:
         async with UsbIpSession(host, busid, port) as session:
             return await backend.scan(session, dpi, color)

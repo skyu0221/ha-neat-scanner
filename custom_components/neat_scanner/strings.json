@@ -4,11 +4,17 @@
       "user": {
         "title": "Connect to a USB/IP server",
         "description": "Enter the address of the USBAnywhere or usbipd server the Neat ADF scanner is shared from.",
-        "data": {"host": "Host", "port": "Port", "save_dir": "Save directory"}
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "save_dir": "Save directory"
+        }
       },
       "device": {
         "title": "Choose the scanner",
-        "data": {"busid": "USB device"}
+        "data": {
+          "busid": "USB device"
+        }
       }
     },
     "error": {
@@ -16,7 +22,9 @@
       "no_devices": "The server is not sharing any USB devices",
       "dir_not_allowed": "This directory is not allowed. Add it to allowlist_external_dirs."
     },
-    "abort": {"already_configured": "This scanner is already configured"}
+    "abort": {
+      "already_configured": "This scanner is already configured"
+    }
   },
   "options": {
     "step": {
@@ -27,36 +35,98 @@
           "dpi": "Default DPI",
           "color": "Default color mode",
           "format": "File format",
-          "scan_interval": "Status check interval (seconds)"
+          "scan_interval": "Status check interval (seconds)",
+          "sheets": "Maximum sheets per scan",
+          "auto_crop": "Crop to the paper automatically"
         }
       }
     },
-    "error": {"dir_not_allowed": "This directory is not allowed. Add it to allowlist_external_dirs."}
+    "error": {
+      "dir_not_allowed": "This directory is not allowed. Add it to allowlist_external_dirs."
+    }
   },
   "entity": {
-    "binary_sensor": {"online": {"name": "Online"}},
+    "binary_sensor": {
+      "online": {
+        "name": "Online"
+      }
+    },
     "sensor": {
-      "status": {"name": "Status", "state": {"offline": "Offline", "idle": "Idle", "scanning": "Scanning", "error": "Error"}},
-      "last_scan": {"name": "Last scan"}
+      "status": {
+        "name": "Status",
+        "state": {
+          "offline": "Offline",
+          "idle": "Idle",
+          "scanning": "Scanning",
+          "error": "Error"
+        }
+      },
+      "last_scan": {
+        "name": "Last scan"
+      }
     },
     "select": {
-      "dpi": {"name": "Resolution (DPI)"},
-      "color": {"name": "Color mode", "state": {"color": "Color", "grayscale": "Grayscale", "bw": "Black and white"}}
+      "dpi": {
+        "name": "Resolution (DPI)"
+      },
+      "color": {
+        "name": "Color mode",
+        "state": {
+          "color": "Color",
+          "grayscale": "Grayscale",
+          "bw": "Black and white"
+        }
+      }
     },
-    "button": {"scan": {"name": "Scan"}}
+    "button": {
+      "scan": {
+        "name": "Scan"
+      }
+    }
   },
   "services": {
     "scan": {
       "name": "Scan",
       "description": "Scan all pages in the document feeder and save them.",
       "fields": {
-        "dpi": {"name": "Resolution (DPI)", "description": "Overrides the selected DPI."},
-        "color": {"name": "Color mode", "description": "Overrides the selected color mode."},
-        "format": {"name": "File format", "description": "png, jpeg or a single multipage pdf."},
-        "save_dir": {"name": "Save directory", "description": "Overrides the configured save directory."},
-        "entry_id": {"name": "Config entry", "description": "Only needed with several scanners."}
+        "dpi": {
+          "name": "Resolution (DPI)",
+          "description": "Overrides the selected DPI."
+        },
+        "color": {
+          "name": "Color mode",
+          "description": "Overrides the selected color mode."
+        },
+        "format": {
+          "name": "File format",
+          "description": "png, jpeg or a single multipage pdf."
+        },
+        "save_dir": {
+          "name": "Save directory",
+          "description": "Overrides the configured save directory."
+        },
+        "entry_id": {
+          "name": "Config entry",
+          "description": "Only needed with several scanners."
+        },
+        "sheets": {
+          "name": "Maximum sheets",
+          "description": "Scan up to this many sheets from the feeder; stops earlier when the feeder is empty."
+        },
+        "auto_crop": {
+          "name": "Auto crop",
+          "description": "Crop each page to the paper area."
+        }
       }
     }
   },
-  "selector": {"color_mode": {"options": {"color": "Color", "grayscale": "Grayscale", "bw": "Black and white"}}}
+  "selector": {
+    "color_mode": {
+      "options": {
+        "color": "Color",
+        "grayscale": "Grayscale",
+        "bw": "Black and white"
+      }
+    }
+  }
 }

@@ -11,9 +11,9 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
-    CONF_BUSID, CONF_COLOR, CONF_DPI, CONF_FORMAT, CONF_HOST, CONF_PORT,
-    CONF_SAVE_DIR, CONF_SCAN_INTERVAL, DEFAULT_COLOR, DEFAULT_DPI,
-    DEFAULT_FORMAT, DEFAULT_SAVE_DIR, DEFAULT_SCAN_INTERVAL, DOMAIN,
+    CONF_AUTO_CROP, CONF_BUSID, CONF_COLOR, CONF_DPI, CONF_FORMAT, CONF_HOST, CONF_PORT,
+    CONF_SAVE_DIR, CONF_SCAN_INTERVAL, CONF_SHEETS, DEFAULT_AUTO_CROP, DEFAULT_COLOR, DEFAULT_DPI,
+    DEFAULT_FORMAT, DEFAULT_SAVE_DIR, DEFAULT_SHEETS, DEFAULT_SCAN_INTERVAL, DOMAIN,
     EVENT_SCAN_COMPLETE, NEAT_PID, NEAT_VID,
 )
 from .scanner import ScanError, run_scan, save_pages
@@ -67,6 +67,7 @@ class NeatScannerCoordinator(DataUpdateCoordinator[dict]):
     async def async_scan(
         self, dpi: int | None = None, color: str | None = None,
         save_dir: str | None = None, fmt: str | None = None,
+        sheets: int | None = None, auto_crop: bool | None = None,
     ) -> list[str]:
         """Scan the ADF, save the pages, fire an event and return the paths."""
         if self._lock.locked():
@@ -81,8 +82,11 @@ class NeatScannerCoordinator(DataUpdateCoordinator[dict]):
             self.scanning, self.last_error = True, None
             self.async_update_listeners()
             try:
+                opts = {**self.entry.data, **self.entry.options}
                 pages = await run_scan(
-                    self.host, self.port, self.busid, dpi or self.dpi, color or self.color
+                    self.host, self.port, self.busid, dpi or self.dpi, color or self.color,
+                    max_sheets=sheets or opts.get(CONF_SHEETS, DEFAULT_SHEETS),
+                    auto_crop=opts.get(CONF_AUTO_CROP, DEFAULT_AUTO_CROP) if auto_crop is None else auto_crop,
                 )
                 files = await self.hass.async_add_executor_job(
                     save_pages, pages, directory, fmt or self.file_format
