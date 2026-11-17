@@ -1,0 +1,22 @@
+scan:
+  fields:
+    dpi:
+      selector:
+        select:
+          options: ["150", "200", "300", "600"]
+    color:
+      selector:
+        select:
+          options: [color, grayscale, bw]
+          translation_key: color_mode
+    format:
+      selector:
+        select:
+          options: [png, jpeg, pdf]
+    save_dir:
+      selector:
+        text:
+    entry_id:
+      advanced: true
+      selector:
+        text:
