@@ -152,14 +152,18 @@ async def _scan_sheet(session: UsbIpSession, script: dict, first: bool) -> bytes
         scan_error = err
     except UsbIpError as err:
         scan_error = ScanError(f"USB/IP error during scan: {err}")
-    finally:
-        try:  # always try to park the motor / stop the scan
-            await _play(session, script["tail"], timeout=10)
-        except UsbIpError:
-            pass
     if scan_error:
         raise scan_error
     return bytes(raw)
+
+
+async def _finish_sheet(session: UsbIpSession, script: dict, more: bool) -> None:
+    """Stop sequence. With another sheet waiting the driver skips the eject step, otherwise the
+    paper would be pushed out and the next sheet pulled in too far (its leading part is lost)."""
+    try:
+        await _play(session, script["tail_between"] if more else script["tail"], timeout=10)
+    except UsbIpError:
+        pass
 
 
 class NeatBackend:
@@ -177,15 +181,21 @@ class NeatBackend:
         if not (await _paper_flags(session))["paper"]:
             raise ScanError("No paper in the feeder")
         for sheet in range(self.max_sheets):
-            raw = await _scan_sheet(session, script, first=sheet == 0)
+            try:
+                raw = await _scan_sheet(session, script, first=sheet == 0)
+            except ScanError:
+                await _finish_sheet(session, script, False)
+                raise
+            more = sheet + 1 < self.max_sheets and (await _paper_flags(session))["paper"]
+            await _finish_sheet(session, script, more)
             if len(raw) // (LINE_BYTES_300 * 3 * (2 if dpi > 300 else 1)) < 8:
                 if sheet == 0:
                     raise ScanError("The scanner returned too little data (is paper loaded in the feeder?)")
                 break  # feeder empty: done
             pages.append(await loop.run_in_executor(None, decode_page, raw, dpi, color, self.auto_crop))
             del raw
-            if not (await _paper_flags(session))["paper"]:
-                break  # feeder empty
+            if not more:
+                break
         return pages
 
 

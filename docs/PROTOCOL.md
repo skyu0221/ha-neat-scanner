@@ -62,6 +62,15 @@ bulk OUT `0x02`, interrupt IN `0x83` (unused in the capture).
   sequence the next full scan program feeds the waiting sheet. The paper sensor still reads
   "paper" after sheet 1 when sheet 2 waits and "empty" after the last one.
 
+## Stacks of sheets (round 3 capture, verified on hardware)
+
+- After each sheet the driver checks the paper sensor. With another sheet waiting it runs the stop
+  sequence **without the eject step** (the `0258` motor loop with 30-46 writes, preceded by `20ff`,
+  `3500 3600 3700`, `6b8c` and a bulk OUT of the RAM table); only after the last sheet does it eject.
+- Ejecting early pulls the waiting sheet in about 1.8 in too far, so its leading part is not scanned.
+- Result: a stack of three receipts scanned completely (3661, 3137 and 2929 rows against 3665,
+  3136 and 2932 for the Windows driver).
+
 ## Inputs and buttons (round 2 capture)
 
 - No interrupt IN (`0x83`) traffic was ever seen; the scanner is polled with control transfers.

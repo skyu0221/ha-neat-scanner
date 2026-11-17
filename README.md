@@ -47,12 +47,10 @@ homeassistant:
 - The scanner natively runs 300 and 600 dpi color scans. Other DPI values are resampled from
   those (up to 300 uses the 300 dpi scan, above 300 the 600 dpi scan). Grayscale and black and
   white are converted in software.
-- By default a scan call feeds **one sheet**. Set `sheets` (service field or integration option)
-  to scan a stack: it produces one image per sheet and stops when the paper sensor reports an
-  empty feeder. **Known limitation:** when several sheets are loaded at once the scanner pulls
-  the next sheet in about 1.8 in before the next scan starts, so sheets after the first lose
-  that leading part. Feeding one sheet at a time is complete. A fix needs a capture of the
-  Windows driver scanning a stack (see docs/PROTOCOL.md).
+- A scan call feeds **every sheet in the feeder** (up to the `sheets` option, default 50) and
+  produces one image per sheet; it stops when the paper sensor reports an empty feeder. Load the
+  whole stack at once, like with the Windows driver. Between sheets the driver skips the eject
+  step; ejecting early would pull the next sheet in too far and lose its leading part.
 - A 300 dpi receipt takes about 45 seconds, 600 dpi about 90 seconds
   (mostly the USB/IP link and the scanner's own warm-up).
 - Letter size works: the sensor always scans the full 8.8 in width and the page is cropped
