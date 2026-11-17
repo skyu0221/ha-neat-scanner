@@ -16,7 +16,7 @@ from .const import (
     DEFAULT_FORMAT, DEFAULT_SAVE_DIR, DEFAULT_SHEETS, DEFAULT_SCAN_INTERVAL, DOMAIN,
     EVENT_SCAN_COMPLETE, NEAT_PID, NEAT_VID,
 )
-from .scanner import ScanError, run_scan, save_pages, watch_sensors
+from .scanner import SESSION_SETTLE, ScanError, run_scan, save_pages, watch_sensors
 from .usbip_client import UsbIpError, list_devices
 
 _LOGGER = logging.getLogger(__name__)
@@ -47,6 +47,7 @@ class NeatScannerCoordinator(DataUpdateCoordinator[dict]):
         self.monitor_connected = False
         self._monitor_task: asyncio.Task | None = None
         self._button_listeners: list = []
+        self._monitor_stop: asyncio.Event | None = None
 
     @property
     def save_dir(self) -> str:
@@ -63,6 +64,7 @@ class NeatScannerCoordinator(DataUpdateCoordinator[dict]):
     # --- sensor monitor (paper, cover, scanner button) -------------------------------------
     def start_monitor(self) -> None:
         if self._monitor_task is None and self.options.get(CONF_MONITOR, DEFAULT_MONITOR):
+            self._monitor_stop = asyncio.Event()
             self._monitor_task = self.entry.async_create_background_task(
                 self.hass, self._monitor_loop(), "neat_scanner sensor monitor"
             )
@@ -70,8 +72,13 @@ class NeatScannerCoordinator(DataUpdateCoordinator[dict]):
     async def stop_monitor(self) -> None:
         task, self._monitor_task = self._monitor_task, None
         if task:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            if self._monitor_stop:
+                self._monitor_stop.set()  # let it finish the current request, then close cleanly
+            try:
+                await asyncio.wait_for(asyncio.shield(task), 3)
+            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
         self._set_connected(False)
 
     def add_button_listener(self, callback):
@@ -105,11 +112,15 @@ class NeatScannerCoordinator(DataUpdateCoordinator[dict]):
 
     async def _monitor_loop(self) -> None:
         while True:
+            await asyncio.sleep(SESSION_SETTLE)  # let the previous session release the scanner
             try:
                 await watch_sensors(
                     self.host, self.port, self.busid,
                     self._on_sensor_state, self._on_button, self._set_connected,
+                    stop=self._monitor_stop,
                 )
+                if self._monitor_stop is not None and self._monitor_stop.is_set():
+                    return
             except UsbIpError as err:
                 _LOGGER.debug("Sensor monitor link lost: %s", err)
             self._set_connected(False)
@@ -147,7 +158,9 @@ class NeatScannerCoordinator(DataUpdateCoordinator[dict]):
         async with self._lock:
             self.scanning, self.last_error = True, None
             self.async_update_listeners()
-            await self.stop_monitor()  # only one USB/IP session can hold the scanner
+            if self._monitor_task is not None:  # only one USB/IP session can hold the scanner
+                await self.stop_monitor()
+                await asyncio.sleep(SESSION_SETTLE)
             try:
                 opts = {**self.entry.data, **self.entry.options}
                 pages = await run_scan(

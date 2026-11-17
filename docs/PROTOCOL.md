@@ -48,6 +48,13 @@ bulk OUT `0x02`, interrupt IN `0x83` (unused in the capture).
 - Letter and receipt scans use identical register programs and upload tables (verified).
 - The earlier black and white capture is truncated by USBPcap (65535 byte snaplen).
 
+## USB/IP session hand-over
+
+After one USB/IP session closes, the phone needs about 1 to 2 seconds before the scanner accepts the
+next one cleanly; a request in that window can return STALL (status -32). The integration waits
+2 s when it stops the sensor monitor for a scan, before the monitor reconnects, and retries
+once when one of the first two steps of a scan stalls.
+
 ## Sensors (verified live with a monitor)
 
 - Feeder paper: `r40 & 0x80 == 0 and r41 & 0x08 == 0` means **paper present** (both bits are 1

@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import struct
 from dataclasses import dataclass
 from datetime import datetime
@@ -53,6 +54,7 @@ SEGMENT_ORDER = (2, 0, 1)  # byte phase -> left, middle, right segment
 CHUNK_UNIT = 12  # data counter register unit in bytes
 POLL_TIMEOUT = 180.0  # give up when no data arrives for this long (seconds)
 MAX_DELAY_MS = 2000
+SESSION_SETTLE = 2.0  # the phone needs this long to hand the scanner to the next USB/IP session
 STALL_SECS = 4.0  # data counter unchanged this long after data arrived: the sheet is complete
 NEXT_SHEET_TIMEOUT = 25.0  # after the first sheet: no data for this long means the feeder is empty
 
@@ -64,20 +66,23 @@ def _load_script(name: str) -> dict:
 
 async def _play(session: UsbIpSession, ops: list, timeout: float = 15.0) -> None:
     """Replay captured control/bulk operations, keeping their original timing."""
-    for op in ops:
-        if op[0] == "c":
-            setup = bytes.fromhex(op[1])
-            rtype, req, val, idx, length = struct.unpack("<BBHHH", setup)
-            if op[3]:
-                await asyncio.sleep(min(op[3], MAX_DELAY_MS) / 1000)
-            if rtype & 0x80:
-                await session.control(rtype, req, val, idx, length, timeout=timeout)
-            else:
-                await session.control(rtype, req, val, idx, 0, bytes.fromhex(op[2]), timeout=timeout)
-        elif op[0] == "bo":
-            await session.bulk_write(EP_OUT, bytes.fromhex(op[1]), timeout=timeout)
-        elif op[0] == "bi":
-            await session.bulk_read(EP_IN, op[1], timeout=timeout)
+    for n, op in enumerate(ops):
+        try:
+            if op[0] == "c":
+                setup = bytes.fromhex(op[1])
+                rtype, req, val, idx, length = struct.unpack("<BBHHH", setup)
+                if op[3]:
+                    await asyncio.sleep(min(op[3], MAX_DELAY_MS) / 1000)
+                if rtype & 0x80:
+                    await session.control(rtype, req, val, idx, length, timeout=timeout)
+                else:
+                    await session.control(rtype, req, val, idx, 0, bytes.fromhex(op[2]), timeout=timeout)
+            elif op[0] == "bo":
+                await session.bulk_write(EP_OUT, bytes.fromhex(op[1]), timeout=timeout)
+            elif op[0] == "bi":
+                await session.bulk_read(EP_IN, op[1], timeout=timeout)
+        except UsbIpError as err:
+            raise UsbIpError(f"{err} (step {n}/{len(ops)}: {op[0]} {str(op[1])[:24]})") from err
 
 
 async def _read_chunk(session: UsbIpSession, length: int, timeout: float = 20.0) -> bytes:
@@ -113,6 +118,7 @@ async def _paper_flags(session: UsbIpSession) -> dict:
 
 async def watch_sensors(
     host: str, port: int, busid: str, on_state, on_button, on_connected, interval: float = 0.25,
+    stop: asyncio.Event | None = None,
 ) -> None:
     """Poll paper, cover and button on a persistent USB/IP session until cancelled.
 
@@ -134,7 +140,14 @@ async def watch_sensors(
             if flags["button"] and not prev_button:
                 on_button()
             prev_button = flags["button"]
-            await asyncio.sleep(interval)
+            if stop is None:
+                await asyncio.sleep(interval)
+            else:  # leave between two requests so no transfer is cut off
+                try:
+                    await asyncio.wait_for(stop.wait(), interval)
+                    return
+                except asyncio.TimeoutError:
+                    pass
 
 
 async def _scan_sheet(session: UsbIpSession, script: dict, first: bool) -> bytes:
@@ -300,11 +313,21 @@ async def run_scan(
 ) -> list[Page]:
     """Import the remote scanner, scan the ADF and return the pages."""
     backend = backend or NeatBackend(max_sheets, auto_crop)
-    try:
-        async with UsbIpSession(host, busid, port) as session:
-            return await backend.scan(session, dpi, color)
-    except UsbIpError as err:
-        raise ScanError(str(err)) from err
+    for attempt in (1, 2):
+        try:
+            async with UsbIpSession(host, busid, port) as session:
+                return await backend.scan(session, dpi, color)
+        except UsbIpError as err:
+            raise ScanError(str(err)) from err
+        except ScanError as err:
+            # A request stalled right after the session started: the scanner was not handed over
+            # yet. Nothing has been scanned at that point, so wait and try once more.
+            if attempt == 1 and "status=-32" in str(err) and re.search(r"step [01]/", str(err)):
+                _LOGGER.debug("Scanner not ready yet, retrying: %s", err)
+                await asyncio.sleep(SESSION_SETTLE)
+                continue
+            raise
+    raise ScanError("unreachable")
 
 
 def save_pages(pages: list[Page], directory: str, fmt: str, prefix: str = "scan") -> list[str]:
