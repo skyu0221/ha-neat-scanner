@@ -10,7 +10,7 @@ from .const import (
     COLOR_OPTIONS, CONF_BUSID, CONF_COLOR, CONF_DPI, CONF_FORMAT, CONF_HOST,
     CONF_PORT, CONF_SAVE_DIR, CONF_SCAN_INTERVAL, DEFAULT_COLOR, DEFAULT_DPI,
     DEFAULT_FORMAT, DEFAULT_PORT, DEFAULT_SAVE_DIR, DEFAULT_SCAN_INTERVAL,
-    DOMAIN, DPI_OPTIONS, FORMAT_OPTIONS, NEAT_PID, NEAT_VID,
+    DOMAIN, DPI_MAX, DPI_MIN, FORMAT_OPTIONS, NEAT_PID, NEAT_VID,
 )
 from .usbip_client import UsbIpError, list_devices
 
@@ -79,7 +79,7 @@ class NeatScannerOptionsFlow(OptionsFlow):
             errors["base"] = "dir_not_allowed"
         schema = vol.Schema({
             vol.Required(CONF_SAVE_DIR, default=cur.get(CONF_SAVE_DIR, DEFAULT_SAVE_DIR)): str,
-            vol.Required(CONF_DPI, default=cur.get(CONF_DPI, DEFAULT_DPI)): vol.In(DPI_OPTIONS),
+            vol.Required(CONF_DPI, default=cur.get(CONF_DPI, DEFAULT_DPI)): vol.All(int, vol.Range(min=DPI_MIN, max=DPI_MAX)),
             vol.Required(CONF_COLOR, default=cur.get(CONF_COLOR, DEFAULT_COLOR)): vol.In(COLOR_OPTIONS),
             vol.Required(CONF_FORMAT, default=cur.get(CONF_FORMAT, DEFAULT_FORMAT)): vol.In(FORMAT_OPTIONS),
             vol.Required(CONF_SCAN_INTERVAL, default=cur.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)):

@@ -1,12 +1,14 @@
 {
   "domain": "neat_scanner",
   "name": "Neat ADF scanner",
-  "codeowners": ["@skyu0221"],
+  "codeowners": [
+    "@skyu0221"
+  ],
   "config_flow": true,
   "documentation": "https://github.com/skyu0221/ha-neat-scanner",
   "integration_type": "device",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/skyu0221/ha-neat-scanner/issues",
   "requirements": [],
-  "version": "0.1.0"
+  "version": "0.2.0"
 }

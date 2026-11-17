@@ -7,14 +7,14 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.helpers import config_validation as cv
 
-from .const import COLOR_OPTIONS, DOMAIN, DPI_OPTIONS, FORMAT_OPTIONS, SERVICE_SCAN
+from .const import COLOR_OPTIONS, DOMAIN, DPI_MAX, DPI_MIN, FORMAT_OPTIONS, SERVICE_SCAN
 from .coordinator import NeatScannerCoordinator
 
 PLATFORMS = ["binary_sensor", "sensor", "select", "button"]
 
 SCAN_SCHEMA = vol.Schema(
     {
-        vol.Optional("dpi"): vol.All(vol.Coerce(int), vol.In(DPI_OPTIONS)),
+        vol.Optional("dpi"): vol.All(vol.Coerce(int), vol.Range(min=DPI_MIN, max=DPI_MAX)),
         vol.Optional("color"): vol.In(COLOR_OPTIONS),
         vol.Optional("format"): vol.In(FORMAT_OPTIONS),
         vol.Optional("save_dir"): cv.string,

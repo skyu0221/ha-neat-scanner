@@ -4,15 +4,15 @@ Home Assistant integration for the **Neat ADF scanner** (USB `1f44:0050`) shared
 network with [USBAnywhere](https://github.com/oscarlosu-lab/USBAnywhere) (Android app) or any
 standard `usbipd` server.
 
-> **Status: early development.** Device discovery, online/offline status, settings, the scan
-> button and the `neat_scanner.scan` service work. The Neat scan protocol is proprietary (not in
-> SANE) and is still being reverse engineered, so a scan currently fails with
-> "protocol is not implemented yet". Contributions with USB captures are welcome.
+> **Status: working.** Scanning has been verified on real hardware (Neat ADF scanner shared by
+> USBAnywhere on Android): 300 and 600 dpi color scans, plus derived modes. The Neat protocol is
+> proprietary and not in SANE; it was reverse engineered from a USB capture of the Windows driver
+> (see [docs/PROTOCOL.md](docs/PROTOCOL.md)).
 
 ## Features
 
 - Online/offline binary sensor (polls the USB/IP server and checks the scanner is exported)
-- Scan button plus **DPI** (150/200/300/600) and **color mode** (color/grayscale/black and white) selectors
+- Scan button plus **DPI** (any value from 75 to 600) and **color mode** (color/grayscale/black and white) selectors
 - `neat_scanner.scan` service with `dpi`, `color`, `format` (png/jpeg/pdf) and `save_dir`
 - Configurable save directory, default settings and polling interval (integration options)
 - `neat_scanner_scan_complete` event with the saved file paths
@@ -42,7 +42,18 @@ homeassistant:
     - /media/scans
 ```
 
+## Scanning notes
+
+- The scanner natively runs 300 and 600 dpi color scans. Other DPI values are resampled from
+  those (up to 300 uses the 300 dpi scan, above 300 the 600 dpi scan). Grayscale and black and
+  white are converted in software.
+- One scan call feeds one sheet; a 300 dpi receipt takes about 45 seconds, 600 dpi about 90 seconds
+  (mostly the USB/IP link and the scanner's own warm-up).
+- The image is the full sensor width (882 px at 300 dpi); there is no auto crop or deskew yet.
+- If a scan is interrupted the scanner can stay stuck; unplug and replug it on the phone.
+
 ## Roadmap
 
-- [ ] Neat scan protocol (needs reverse engineering)
+- [x] Neat scan protocol (replayed register programs, see docs/PROTOCOL.md)
+- [ ] Native 150/200 dpi and grayscale programs, multi-page ADF feeding, auto crop
 - [ ] Direct USB connection (no USB/IP) — TODO

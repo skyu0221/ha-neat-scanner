@@ -2,8 +2,11 @@ scan:
   fields:
     dpi:
       selector:
-        select:
-          options: ["150", "200", "300", "600"]
+        number:
+          min: 75
+          max: 600
+          step: 1
+          unit_of_measurement: dpi
     color:
       selector:
         select:

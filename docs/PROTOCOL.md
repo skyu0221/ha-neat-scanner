@@ -30,17 +30,20 @@ bulk OUT `0x02`, interrupt IN `0x83` (unused in the capture).
    `0xfd..`, `0x41`. The final chunk is shorter (e.g. `0xD90E`).
 6. Stop sequence: register writes, GPIO writes, motor park.
 
-## Image data
+## Image data (verified on hardware)
 
-- Raw stream, 8 bit, one **color plane per line**: `R`, `G`, `B` lines alternate.
-- Line length at 300 dpi = **2646 bytes** (full sensor width, 8.82 in); 600 dpi doubles it.
-- A scan of N image rows is `3*N` raw lines. The image is rotated by 180 degrees.
-- The Windows driver saves a cropped image (auto crop); the raw sensor image is full width.
-- Black and white mode uses different chunking (`65508`+`102`); layout not yet decoded.
+- Raw 8 bit stream, **2646 bytes per line at 300 dpi** (5292 at 600 dpi) = 882 (1764) pixels x 3 bytes.
+- Only **one byte of every three** carries the sample (the other two are about 0); pick the
+  phase with the highest mean.
+- **Three consecutive lines are the R, G and B lines** of one image row (`rows = lines / 3`).
+- The image is rotated by 180 degrees.
+- The data counter in registers `0x42..0x45` (big endian, unit 12 bytes) is the number of bytes
+  waiting in scanner RAM; register `0x40 & 0xC0 == 0xC0` means the scan finished.
+- The black and white capture is truncated by USBPcap (65535 byte snaplen) so its layout was not
+  used; black and white is derived from the color scan.
 
 ## Open questions
 
-- How the host derives the final chunk length (candidate: data-count registers around `0x42..0x45`).
-- Exact register differences between modes; only the three captured modes are known.
-- ADF feed/paper-present detection and multi-page behaviour (single page per capture so far).
-- Black and white raw layout.
+- Exact register differences for other native resolutions (150/200 dpi) and gray.
+- ADF behavior with several sheets or an empty feeder.
+- Whether the Windows driver crops or rescales (its BMP is 928 px wide, the sensor delivers 882).
