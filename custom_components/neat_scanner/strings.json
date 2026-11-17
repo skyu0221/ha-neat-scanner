@@ -37,7 +37,9 @@
           "format": "File format",
           "scan_interval": "Status check interval (seconds)",
           "sheets": "Maximum sheets per scan",
-          "auto_crop": "Crop to the paper automatically"
+          "auto_crop": "Crop to the paper automatically",
+          "monitor": "Watch paper, cover and button (keeps the scanner connected)",
+          "scan_on_button": "Scan when the scanner button is pressed"
         }
       }
     },
@@ -49,6 +51,12 @@
     "binary_sensor": {
       "online": {
         "name": "Online"
+      },
+      "paper": {
+        "name": "Paper in feeder"
+      },
+      "cover": {
+        "name": "Cover"
       }
     },
     "sensor": {
@@ -81,6 +89,18 @@
     "button": {
       "scan": {
         "name": "Scan"
+      }
+    },
+    "event": {
+      "scanner_button": {
+        "name": "Scanner button",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "pressed": "Pressed"
+            }
+          }
+        }
       }
     }
   },

@@ -111,6 +111,32 @@ async def _paper_flags(session: UsbIpSession) -> dict:
     }
 
 
+async def watch_sensors(
+    host: str, port: int, busid: str, on_state, on_button, on_connected, interval: float = 0.25,
+) -> None:
+    """Poll paper, cover and button on a persistent USB/IP session until cancelled.
+
+    The button is a pulse of about 0.5 s, so the interval must stay below 0.3 s. Raises
+    UsbIpError when the link drops.
+    """
+    async with UsbIpSession(host, busid, port) as session:
+        on_connected(True)
+        prev = None
+        prev_button = False
+        while True:
+            flags = await _paper_flags(session)
+            # The paper reading flickers while the cover is open: keep the last value then.
+            paper = flags["paper"] if flags["cover_closed"] or prev is None else prev[0]
+            state = (paper, flags["cover_closed"])
+            if state != prev:
+                prev = state
+                on_state(*state)
+            if flags["button"] and not prev_button:
+                on_button()
+            prev_button = flags["button"]
+            await asyncio.sleep(interval)
+
+
 async def _scan_sheet(session: UsbIpSession, script: dict, first: bool) -> bytes:
     """Feed and scan one sheet; returns the raw sensor stream (may be empty after the last sheet)."""
     loop = asyncio.get_running_loop()

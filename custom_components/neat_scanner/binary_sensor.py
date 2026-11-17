@@ -8,7 +8,8 @@ from .entity import NeatEntity
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    async_add_entities([ScannerOnline(hass.data[DOMAIN][entry.entry_id])])
+    c = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities([ScannerOnline(c), PaperPresent(c), CoverOpen(c)])
 
 
 class ScannerOnline(NeatEntity, BinarySensorEntity):
@@ -28,3 +29,33 @@ class ScannerOnline(NeatEntity, BinarySensorEntity):
         return {"server": f"{self.coordinator.host}:{self.coordinator.port}",
                 "server_reachable": d.get("reachable", False),
                 "busid": self.coordinator.busid}
+
+
+class _MonitorSensor(NeatEntity, BinarySensorEntity):
+    @property
+    def available(self) -> bool:
+        return self.coordinator.monitor_connected
+
+
+class PaperPresent(_MonitorSensor):
+    _attr_translation_key = "paper"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator, "paper")
+
+    @property
+    def is_on(self):
+        return self.coordinator.paper
+
+
+class CoverOpen(_MonitorSensor):
+    _attr_device_class = BinarySensorDeviceClass.DOOR
+    _attr_translation_key = "cover"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator, "cover")
+
+    @property
+    def is_on(self):
+        c = self.coordinator.cover_closed
+        return None if c is None else not c

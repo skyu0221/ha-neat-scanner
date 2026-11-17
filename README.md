@@ -11,6 +11,9 @@ standard `usbipd` server.
 
 ## Features
 
+- **Scanner button**: an event entity (`pressed`) plus the `neat_scanner_button` event; by default
+  pressing the button on the scanner starts a scan (option *Scan when the scanner button is pressed*)
+- **Paper in feeder** and **cover** binary sensors, polled four times a second
 - Online/offline binary sensor (polls the USB/IP server and checks the scanner is exported)
 - Scan button plus **DPI** (any value from 75 to 600) and **color mode** (color/grayscale/black and white) selectors
 - `neat_scanner.scan` service with `dpi`, `color`, `format` (png/jpeg/pdf) and `save_dir`
@@ -55,6 +58,9 @@ homeassistant:
   (mostly the USB/IP link and the scanner's own warm-up).
 - Letter size works: the sensor always scans the full 8.8 in width and the page is cropped
   automatically to the paper. There is no deskew yet.
+- The sensor monitor keeps one USB/IP connection open (needed to catch the 0.5 s button pulse).
+  It pauses during scans; turn it off in the options if you need to share the scanner with
+  another computer.
 - If a scan is interrupted the scanner can stay stuck; unplug and replug it on the phone.
 
 ## Roadmap

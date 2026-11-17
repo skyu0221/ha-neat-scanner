@@ -10,7 +10,7 @@ from homeassistant.helpers import config_validation as cv
 from .const import COLOR_OPTIONS, DOMAIN, DPI_MAX, DPI_MIN, FORMAT_OPTIONS, SERVICE_SCAN
 from .coordinator import NeatScannerCoordinator
 
-PLATFORMS = ["binary_sensor", "sensor", "select", "button"]
+PLATFORMS = ["binary_sensor", "sensor", "select", "button", "event"]
 
 SCAN_SCHEMA = vol.Schema(
     {
@@ -31,6 +31,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_reload))
+    coordinator.start_monitor()
 
     if not hass.services.has_service(DOMAIN, SERVICE_SCAN):
 
@@ -58,6 +59,7 @@ async def _reload(hass: HomeAssistant, entry: ConfigEntry) -> None:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if ok:
+        await hass.data[DOMAIN][entry.entry_id].stop_monitor()
         hass.data[DOMAIN].pop(entry.entry_id)
         if not hass.data[DOMAIN]:
             hass.services.async_remove(DOMAIN, SERVICE_SCAN)
