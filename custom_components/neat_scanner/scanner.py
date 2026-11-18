@@ -231,6 +231,18 @@ class NeatBackend:
         self.deskew = deskew
         self.rotate = rotate
 
+    def _decode_sheets(self, raw: bytes, dpi: int, color: str, name: str) -> list[Page]:
+        """Decode one scan stream; a continuous program may contain several sheets."""
+        line = GEOMETRY[name][0]
+        bpr = line * (1 if name in GRAY_MODES else 3)
+        return [
+            decode_page(
+                raw[a * bpr : b * bpr], dpi, color, self.auto_crop, mode=name,
+                calibration=self.calibration.get("front"), deskew=self.deskew, rotate=self.rotate,
+            )
+            for a, b in sheet_ranges(raw, name)
+        ]
+
     async def calibrate(self, session: UsbIpSession) -> dict:
         """Scan a blank white sheet (double-sided pass) and return the white profiles."""
         loop = asyncio.get_running_loop()
@@ -283,15 +295,14 @@ class NeatBackend:
                     self.rotate,
                 )
             else:
-                pages.append(await loop.run_in_executor(
-                    None, lambda: decode_page(
-                        raw, dpi, color, self.auto_crop, mode=name,
-                        calibration=self.calibration.get("front"), deskew=self.deskew, rotate=self.rotate,
-                    )
-                ))
+                pages += await loop.run_in_executor(None, self._decode_sheets, raw, dpi, color, name)
             del raw
             if not more:
                 break
+        per_sheet = 2 if self.duplex else 1
+        if len(pages) > self.max_sheets * per_sheet:  # a continuous program scans the whole stack
+            _LOGGER.warning("Scanned %d sheets, keeping the first %d", len(pages) // per_sheet, self.max_sheets)
+            pages = pages[: self.max_sheets * per_sheet]
         return pages
 
 
@@ -304,6 +315,55 @@ def _mode_for(dpi: int, duplex: bool = False, color: str = "color") -> str:
     if color in ("grayscale", "bw"):
         return "g300"  # a third of the data of colour, so faster
     return "s150" if dpi <= 150 else "c300"
+
+
+CONTINUOUS_MODES = {"c300", "d300", "g300"}  # programs that keep feeding until the feeder is empty
+GAP_ROWS = 8  # a gap between two sheets is at least this many rows with (almost) no paper
+
+
+def sheet_ranges(raw: bytes, mode: str) -> list[tuple[int, int]]:
+    """Split a continuous multi-sheet stream into per-sheet row ranges (in scan order).
+
+    With these programs the scanner pulls the next sheet in on its own, so the stream has no
+    page marker; the sheets are separated by a short gap (10 to 14 rows at 300 dpi) in which the
+    sensor sees almost no paper. Returns ``[(first_row, last_row_exclusive), ...]`` in units of
+    sensor rows (R, G, B lines or one gray line, or the front side of a duplex stream).
+    """
+    import numpy as np
+
+    line = GEOMETRY[mode][0]
+    nl = 1 if mode in GRAY_MODES else 3
+    rows = len(raw) // line // nl
+    if rows < 8 or mode not in CONTINUOUS_MODES:
+        return [(0, rows)]
+    img = _assemble(raw[: rows * nl * line], mode)[::-1, ::3, 1]  # scan order, every 3rd column, green
+    col = np.percentile(img[:: max(1, rows // 300)], 90, axis=0)
+    cols = np.where(col > 0.6 * col.max())[0]
+    if len(cols) < 20:
+        return [(0, rows)]
+    sub = img[:, cols[0] : cols[-1] + 1].astype(np.float32)
+    white = float(np.percentile(sub[:: max(1, rows // 300)], 95))
+    frac = (sub > 0.7 * white).mean(axis=1)
+    dark = frac < 0.5
+    cuts, r = [], 0
+    while r < rows:
+        if not dark[r]:
+            r += 1
+            continue
+        e = r
+        while e < rows and dark[e]:
+            e += 1
+        # an interior gap: paper on both sides
+        if e - r >= GAP_ROWS and r > 30 and rows - e > 30 and frac[max(0, r - 12) : r].mean() > 0.7 \
+                and frac[e : e + 12].mean() > 0.7:
+            cuts.append((r + e) // 2)
+        r = e
+    bounds = [0] + cuts + [rows]
+    out = []
+    for a, b in zip(bounds, bounds[1:]):
+        if (frac[a:b] > 0.7).sum() >= 30:  # skip blank stretches
+            out.append((a, b))
+    return out or [(0, rows)]
 
 
 def _smooth(x, k: int):
@@ -600,10 +660,15 @@ def decode_duplex(
     """Split a duplex stream (6 lines per row: 3 lines of one side, then 3 of the other)."""
     front, back = split_duplex(raw)
     cal = calibration or {}
-    return [
-        decode_page(front, dpi, color, auto_crop, mode="d300", calibration=cal.get("front"), deskew=deskew, rotate=rotate),
-        decode_page(back, dpi, color, auto_crop, mirror=True, mode="d300", calibration=cal.get("back"), deskew=deskew, rotate=rotate),
-    ]
+    bpr = GEOMETRY["d300"][0] * 3
+    pages: list[Page] = []
+    for a, b in sheet_ranges(front, "d300"):
+        fa, fb = a * bpr, b * bpr
+        pages.append(decode_page(front[fa:fb], dpi, color, auto_crop, mode="d300",
+                                 calibration=cal.get("front"), deskew=deskew, rotate=rotate))
+        pages.append(decode_page(back[fa:fb], dpi, color, auto_crop, mirror=True, mode="d300",
+                                 calibration=cal.get("back"), deskew=deskew, rotate=rotate))
+    return pages
 
 
 async def run_scan(

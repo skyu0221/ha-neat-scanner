@@ -160,6 +160,21 @@ Replacing only the tables, exposure and `0x21` of the old scan script with these
 more than that, and no scan after this calibration has been captured yet. USBPcap truncates large
 bulk IN transfers, so the white and dark data of the calibration cannot be taken from the capture.
 
+## Scans after a calibration (round 5 capture)
+
+- After the calibration the Neat app scan program differs from the one before it only in exposure
+  registers (`0x11` `0x23`->`0x13`, `0x15` `0xb6`->`0xa2`), `0x3b` (`0xf3`->`0xf0`), `0x6c` and the shading
+  tables. The tables are **not** the ones uploaded during the calibration, so the host computes the
+  final tables after reading the white data. Using this program removes the dim left edge, the
+  brightness steps between the three segments and the stitching errors seen with the older tables.
+- The Neat app programs (`c300`, `d300`, `g300`) feed **continuously**: the scanner pulls the next
+  sheet in by itself and the stream has no page marker. Sheets are separated by a gap of 10 to 14
+  rows with almost no paper, which `sheet_ranges()` finds. No status register bit toggles between
+  sheets (checked on a three sheet stack). After a stack the paper sensor reads empty.
+- The programs of the Windows driver (150 dpi, 600 dpi) stop after every sheet instead.
+- The captured tail sequences contain the Neat app's idle loop (36 operations repeated, about 24
+  times); it was removed, which saves 25 seconds or more per scan.
+
 ## Open questions
 
 - Exact formulas for the computed registers and the width-dependent upload tables, so that any
