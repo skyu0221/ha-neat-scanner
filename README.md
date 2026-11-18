@@ -9,6 +9,11 @@ standard `usbipd` server.
 > proprietary and not in SANE; it was reverse engineered from a USB capture of the Windows driver
 > (see [docs/PROTOCOL.md](docs/PROTOCOL.md)).
 
+> **Calibration is per scanner.** The 300 dpi scan programs contain the shading tables of the
+> author's own unit. They work on other units but the brightness may be uneven. See
+> [Use your own calibration](#use-your-own-calibration) to capture and install the values of your
+> scanner.
+
 ## Features
 
 - **Scanner button**: an event entity (`pressed`) plus the `neat_scanner_button` event; by default
@@ -49,6 +54,50 @@ homeassistant:
   allowlist_external_dirs:
     - /media/scans
 ```
+
+## Use your own calibration
+
+The Neat app calibrates the scanner (white paper, "cleaning" and "calibration") and then sends the
+result with every scan. The integration replays one such scan, so to use **your** calibration you
+capture the Neat app once and turn the capture into scan programs. You need a Windows PC for this.
+
+1. **Install** [Wireshark](https://www.wireshark.org) with the **USBPcap** option, the Neat app
+   and a USB/IP client for Windows that can attach the phone's USBAnywhere share.
+2. **Prepare paper**: one blank white Letter sheet, plus a few pages and a receipt that are fine to
+   keep in a capture (the image data is stored in it; USBPcap cuts it at 64 KB per transfer, so
+   the pictures are incomplete, but do not share a capture of private documents).
+3. **Start the capture** with the white sheet already in the feeder: start Wireshark on the USBPcap
+   interface that the scanner appears on (the root hub of the virtual USB/IP device; start it
+   before attaching, so the connection is included), then attach the scanner.
+4. In the Neat app run **Scanner cleaning**, then **Scanner calibration** with the white sheet (if it
+   reports an error, retry; the sheet must be pulled in).
+5. Right after the calibration, scan **in this order** with the Neat app: a **single-sided color**
+   page, a **double-sided color** page, then a **receipt in grayscale**. Note the order.
+6. Stop the capture and save it as `.pcapng` (File > Save as, not pcap).
+7. Extract the programs (Python 3, no packages needed):
+
+   ```bash
+   python3 tools/neat_capture.py list capture.pcapng
+   ```
+
+   It lists every scan in the capture with its size. The cleaning and the calibration also show up
+   as scans; the three you want are the last ones, in the order you scanned them (the gray one
+   reads smaller blocks, 158760 bytes, instead of 261954). Then, with `N` the scan number:
+
+   ```bash
+   python3 tools/neat_capture.py extract capture.pcapng --scan N --out custom_components/neat_scanner/scripts/c300.json   # single-sided color
+   python3 tools/neat_capture.py extract capture.pcapng --scan N --out custom_components/neat_scanner/scripts/d300.json   # double-sided color
+   python3 tools/neat_capture.py extract capture.pcapng --scan N --out custom_components/neat_scanner/scripts/g300.json   # grayscale
+   ```
+
+8. Copy the `scripts` folder into your Home Assistant `custom_components/neat_scanner/scripts`
+   (HACS updates overwrite it, so redo this after an update) and restart Home Assistant. Scan a
+   white sheet to check that the brightness is even.
+
+Capture again whenever you run the Neat app calibration again and want the new values (a scanner that
+got dirty or old). The 600 dpi program (`c600.json`) can be replaced the same way from a 600 dpi
+scan made with a Windows scan application that lets you pick the resolution. See
+[docs/PROTOCOL.md](docs/PROTOCOL.md) for what the programs contain.
 
 ## Scanning notes
 
