@@ -52,21 +52,26 @@ homeassistant:
 
 ## Scanning notes
 
-- Native programs: 600 dpi color, 300 dpi color, 150 dpi color and 300 dpi grayscale. Other DPI
-  values are resampled from the closest one (up to 150 color uses the 150 dpi scan, grayscale and
-  black and white use the faster 300 dpi gray scan, above 300 the 600 dpi scan).
+- Native programs: 600 dpi color, 300 dpi color and 300 dpi grayscale. **Any resolution from 75 to
+  600 dpi** can be set (the Resolution number entity, the options or the `dpi` service field): up to
+  300 dpi the 300 dpi scan is scaled down in software, grayscale and black and white use the faster
+  300 dpi gray scan (a third of the data, and the paper keeps moving without pauses), above 300 the
+  600 dpi scan.
+- The **Estimated scan size** sensor shows the expected file size of a Letter page (attributes: pixels
+  and the size of a 3.1 x 10 in receipt) for the selected resolution, color mode and file format. It
+  is based on real receipt scans, so busy pages compress less.
 - **Scanner calibration data**: the scan programs for 300 dpi color, 300 dpi gray and double-sided
   300 dpi contain the shading tables and exposure values the Neat app uploaded **after a calibration
   of the author's scanner**. They give even brightness across the whole width. The tables are
   specific to one unit; a different scanner may show brighter or darker regions. 150 dpi and 600 dpi
-  still use older tables. See docs/PROTOCOL.md for what a calibration does.
+  still use older tables (150 dpi no longer has its own program). See docs/PROTOCOL.md for what a calibration does.
 - **Calibrate** (button and service) is an extra software white balance on top of that: scan a blank
-  white letter sheet and the per column white level is stored. It matters most for the 150 and
-  600 dpi programs.
+  white letter sheet and the per column white level is stored. It matters most for the 600 dpi
+  program.
 - A scan call feeds **every sheet in the feeder** and produces one image per sheet. The 300 dpi
   programs keep feeding on their own, so the integration splits the stream into sheets at the short
   gap between them (the `sheets` option only caps how many pages are kept). Load the whole stack at
-  once. The 150 and 600 dpi programs stop after each sheet and skip the eject step in between.
+  once. The 600 dpi program stops after each sheet and skip the eject step in between.
 - A 300 dpi receipt takes about 45 seconds, 600 dpi about 90 seconds
   (mostly the USB/IP link and the scanner's own warm-up).
 - Letter size works: the sensor always scans the full 8.8 in width and the page is cropped

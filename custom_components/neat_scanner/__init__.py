@@ -11,7 +11,7 @@ from homeassistant.helpers import config_validation as cv
 from .const import COLOR_OPTIONS, DOMAIN, DPI_MAX, DPI_MIN, FORMAT_OPTIONS, SERVICE_CALIBRATE, SERVICE_SCAN
 from .coordinator import NeatScannerCoordinator
 
-PLATFORMS = ["binary_sensor", "sensor", "select", "button", "event", "switch"]
+PLATFORMS = ["binary_sensor", "sensor", "select", "number", "button", "event", "switch"]
 
 SCAN_SCHEMA = vol.Schema(
     {

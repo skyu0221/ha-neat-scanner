@@ -77,12 +77,12 @@
       },
       "calibration": {
         "name": "Calibrated"
+      },
+      "estimated_size": {
+        "name": "Estimated scan size"
       }
     },
     "select": {
-      "dpi": {
-        "name": "Resolution (DPI)"
-      },
       "color": {
         "name": "Color mode",
         "state": {
@@ -115,6 +115,11 @@
     "switch": {
       "duplex": {
         "name": "Double-sided"
+      }
+    },
+    "number": {
+      "dpi": {
+        "name": "Resolution (DPI)"
       }
     }
   },

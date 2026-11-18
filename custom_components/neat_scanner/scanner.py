@@ -3,7 +3,7 @@
 The scanner is a Genesys GL84x-style device (see docs/PROTOCOL.md). It is not
 supported by SANE, so ``NeatBackend`` replays register programs recorded from
 the Windows driver (``scripts/*.json``) and decodes the raw sensor stream.
-150/200 dpi, grayscale and black and white are derived in software from the
+any dpi up to 300, grayscale and black and white are derived in software from the
 300/600 dpi color scans.
 """
 from __future__ import annotations
@@ -56,7 +56,6 @@ GEOMETRY = {
     "c600": (5292, 40, 8, 600),
     "c300": (2646, 20, 4, 300),
     "d300": (2646, 20, 4, 300),
-    "s150": (1332, 13, 6, 150),
     "g300": (2646, 20, 4, 300),
 }
 GRAY_MODES = {"g300"}  # one sensor line per image row instead of R, G, B lines  # byte phase -> left, middle, right segment
@@ -314,7 +313,29 @@ def _mode_for(dpi: int, duplex: bool = False, color: str = "color") -> str:
         return "c600"
     if color in ("grayscale", "bw"):
         return "g300"  # a third of the data of colour, so faster
-    return "s150" if dpi <= 150 else "c300"
+    return "c300"  # anything up to 300 dpi is scaled down from the 300 dpi scan
+
+
+# Measured file bytes per pixel on real receipt scans (almost independent of the dpi)
+BYTES_PER_PIXEL = {
+    ("png", "color"): 1.9, ("png", "grayscale"): 0.61, ("png", "bw"): 0.02,
+    ("jpeg", "color"): 0.18, ("jpeg", "grayscale"): 0.18, ("jpeg", "bw"): 0.18,
+    ("pdf", "color"): 0.18, ("pdf", "grayscale"): 0.18, ("pdf", "bw"): 0.18,
+}
+
+
+def estimate_size(dpi: int, color: str, fmt: str) -> dict:
+    """Expected pixels and file size of a US Letter page (8.5 x 11 in) and of a 3.1 x 10 in receipt."""
+    bpp = BYTES_PER_PIXEL.get((fmt, color), 1.0)
+    letter = round(8.5 * dpi) * round(11 * dpi)
+    receipt = round(3.1 * dpi) * round(10 * dpi)
+    return {
+        "letter_pixels": f"{round(8.5 * dpi)} x {round(11 * dpi)}",
+        "letter_mpx": round(letter / 1e6, 1),
+        "letter_mb": round(letter * bpp / 1e6, 2),
+        "receipt_pixels": f"{round(3.1 * dpi)} x {round(10 * dpi)}",
+        "receipt_mb": round(receipt * bpp / 1e6, 2),
+    }
 
 
 CONTINUOUS_MODES = {"c300", "d300", "g300"}  # programs that keep feeding until the feeder is empty
