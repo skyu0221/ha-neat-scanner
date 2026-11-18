@@ -354,8 +354,9 @@ def sheet_ranges(raw: bytes, mode: str) -> list[tuple[int, int]]:
         while e < rows and dark[e]:
             e += 1
         # an interior gap: paper on both sides
-        if e - r >= GAP_ROWS and r > 30 and rows - e > 30 and frac[max(0, r - 12) : r].mean() > 0.7 \
-                and frac[e : e + 12].mean() > 0.7:
+        # a real gap gets close to empty (min <= 0.25); a printed rule of asterisks only dips to ~0.35
+        if e - r >= GAP_ROWS and frac[r:e].min() < 0.25 and r > 30 and rows - e > 30 \
+                and frac[max(0, r - 12) : r].mean() > 0.7 and frac[e : e + 12].mean() > 0.7:
             cuts.append((r + e) // 2)
         r = e
     bounds = [0] + cuts + [rows]
