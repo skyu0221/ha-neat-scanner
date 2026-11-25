@@ -222,7 +222,9 @@ class NeatBackend:
     def __init__(
         self, max_sheets: int = 1, auto_crop: bool = True, duplex: bool = False,
         calibration: dict | None = None, deskew: bool = False, rotate: bool = False,
+        split_sheets: bool = True,
     ) -> None:
+        self.split_sheets = split_sheets
         self.max_sheets = max_sheets
         self.auto_crop = auto_crop
         self.duplex = duplex
@@ -239,7 +241,7 @@ class NeatBackend:
                 raw[a * bpr : b * bpr], dpi, color, self.auto_crop, mode=name,
                 calibration=self.calibration.get("front"), deskew=self.deskew, rotate=self.rotate,
             )
-            for a, b in sheet_ranges(raw, name)
+            for a, b in sheet_ranges(raw, name, self.split_sheets)
         ]
 
     async def calibrate(self, session: UsbIpSession) -> dict:
@@ -291,7 +293,7 @@ class NeatBackend:
             if self.duplex:
                 pages += await loop.run_in_executor(
                     None, decode_duplex, raw, dpi, color, self.auto_crop, self.calibration, self.deskew,
-                    self.rotate,
+                    self.rotate, self.split_sheets,
                 )
             else:
                 pages += await loop.run_in_executor(None, self._decode_sheets, raw, dpi, color, name)
@@ -339,14 +341,15 @@ def estimate_size(dpi: int, color: str, fmt: str) -> dict:
 
 
 CONTINUOUS_MODES = {"c300", "d300", "g300"}  # programs that keep feeding until the feeder is empty
-GAP_ROWS = 8  # a gap between two sheets is at least this many rows with (almost) no paper
+MIN_SHEET_ROWS = 300  # a sheet is at least this tall (1 inch at 300 dpi); shorter pieces are joined
+GAP_ROWS = 2  # a gap between two sheets is at least this many rows with (almost) no paper (3 to 14 seen)
 
 
-def sheet_ranges(raw: bytes, mode: str) -> list[tuple[int, int]]:
+def sheet_ranges(raw: bytes, mode: str, split: bool = True) -> list[tuple[int, int]]:
     """Split a continuous multi-sheet stream into per-sheet row ranges (in scan order).
 
     With these programs the scanner pulls the next sheet in on its own, so the stream has no
-    page marker; the sheets are separated by a short gap (10 to 14 rows at 300 dpi) in which the
+    page marker; the sheets are separated by a short gap (3 to 14 rows at 300 dpi, depending on how the sheets touch) in which the
     sensor sees almost no paper. Returns ``[(first_row, last_row_exclusive), ...]`` in units of
     sensor rows (R, G, B lines or one gray line, or the front side of a duplex stream).
     """
@@ -355,7 +358,7 @@ def sheet_ranges(raw: bytes, mode: str) -> list[tuple[int, int]]:
     line = GEOMETRY[mode][0]
     nl = 1 if mode in GRAY_MODES else 3
     rows = len(raw) // line // nl
-    if rows < 8 or mode not in CONTINUOUS_MODES:
+    if rows < 8 or mode not in CONTINUOUS_MODES or not split:
         return [(0, rows)]
     img = _assemble(raw[: rows * nl * line], mode)[::-1, ::3, 1]  # scan order, every 3rd column, green
     col = np.percentile(img[:: max(1, rows // 300)], 90, axis=0)
@@ -379,13 +382,24 @@ def sheet_ranges(raw: bytes, mode: str) -> list[tuple[int, int]]:
         if e - r >= GAP_ROWS and frac[r:e].min() < 0.25 and r > 30 and rows - e > 30 \
                 and frac[max(0, r - 12) : r].mean() > 0.5 and frac[e : e + 12].mean() > 0.5:
             cuts.append((r + e) // 2)
+            _LOGGER.info("sheet gap at row %d: %d rows, min paper %.2f", r, e - r, float(frac[r:e].min()))
+        elif e - r >= 2 and r > 30 and rows - e > 30:
+            _LOGGER.debug("not a sheet gap: rows %d-%d, min paper %.2f", r, e, float(frac[r:e].min()))
         r = e
     bounds = [0] + cuts + [rows]
     out = []
     for a, b in zip(bounds, bounds[1:]):
         if (frac[a:b] > 0.7).sum() >= 30:  # skip blank stretches
             out.append((a, b))
-    return out or [(0, rows)]
+    # A piece shorter than MIN_SHEET_ROWS is no sheet: it is a printed rule or a glitch that looked like a
+    # gap, so join it to its neighbour instead of losing it.
+    merged: list[list[int]] = []
+    for a, b in out:
+        if merged and (b - a < MIN_SHEET_ROWS or merged[-1][1] - merged[-1][0] < MIN_SHEET_ROWS):
+            merged[-1][1] = b
+        else:
+            merged.append([a, b])
+    return [(a, b) for a, b in merged] or [(0, rows)]
 
 
 def _smooth(x, k: int):
@@ -677,14 +691,14 @@ def split_duplex(raw: bytes) -> tuple[bytes, bytes]:
 
 def decode_duplex(
     raw: bytes, dpi: int, color: str, auto_crop: bool = True, calibration: dict | None = None,
-    deskew: bool = False, rotate: bool = False,
+    deskew: bool = False, rotate: bool = False, split_sheets: bool = True,
 ) -> list[Page]:
     """Split a duplex stream (6 lines per row: 3 lines of one side, then 3 of the other)."""
     front, back = split_duplex(raw)
     cal = calibration or {}
     bpr = GEOMETRY["d300"][0] * 3
     pages: list[Page] = []
-    for a, b in sheet_ranges(front, "d300"):
+    for a, b in sheet_ranges(front, "d300", split_sheets):
         fa, fb = a * bpr, b * bpr
         pages.append(decode_page(front[fa:fb], dpi, color, auto_crop, mode="d300",
                                  calibration=cal.get("front"), deskew=deskew, rotate=rotate))
@@ -697,10 +711,10 @@ async def run_scan(
     host: str, port: int, busid: str, dpi: int, color: str,
     backend: Backend | None = None, max_sheets: int = 1, auto_crop: bool = True,
     duplex: bool = False, calibration: dict | None = None, deskew: bool = False,
-    rotate: bool = False,
+    rotate: bool = False, split_sheets: bool = True,
 ) -> list[Page]:
     """Import the remote scanner, scan the ADF and return the pages."""
-    backend = backend or NeatBackend(max_sheets, auto_crop, duplex, calibration, deskew, rotate)
+    backend = backend or NeatBackend(max_sheets, auto_crop, duplex, calibration, deskew, rotate, split_sheets)
     for attempt in (1, 2):
         try:
             async with UsbIpSession(host, busid, port) as session:

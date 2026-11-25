@@ -12,7 +12,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
-    CONF_AUTO_CROP, CONF_AUTO_ROTATE, CONF_DESKEW, DEFAULT_AUTO_ROTATE, DEFAULT_DESKEW, STORAGE_VERSION, CONF_BUSID, CONF_DUPLEX, DEFAULT_DUPLEX, CONF_MONITOR, CONF_SCAN_ON_BUTTON, DEFAULT_MONITOR, DEFAULT_SCAN_ON_BUTTON, EVENT_BUTTON, CONF_COLOR, CONF_DPI, CONF_FORMAT, CONF_HOST, CONF_PORT,
+    CONF_AUTO_CROP, CONF_AUTO_ROTATE, CONF_SPLIT_SHEETS, DEFAULT_SPLIT_SHEETS, CONF_DESKEW, DEFAULT_AUTO_ROTATE, DEFAULT_DESKEW, STORAGE_VERSION, CONF_BUSID, CONF_DUPLEX, DEFAULT_DUPLEX, CONF_MONITOR, CONF_SCAN_ON_BUTTON, DEFAULT_MONITOR, DEFAULT_SCAN_ON_BUTTON, EVENT_BUTTON, CONF_COLOR, CONF_DPI, CONF_FORMAT, CONF_HOST, CONF_PORT,
     CONF_SAVE_DIR, CONF_SCAN_INTERVAL, CONF_SHEETS, DEFAULT_AUTO_CROP, DEFAULT_COLOR, DEFAULT_DPI,
     DEFAULT_FORMAT, DEFAULT_SAVE_DIR, DEFAULT_SHEETS, DEFAULT_SCAN_INTERVAL, DOMAIN,
     EVENT_SCAN_COMPLETE, NEAT_PID, NEAT_VID,
@@ -186,6 +186,7 @@ class NeatScannerCoordinator(DataUpdateCoordinator[dict]):
                     calibration=self.calibration,
                     deskew=opts.get(CONF_DESKEW, DEFAULT_DESKEW),
                     rotate=opts.get(CONF_AUTO_ROTATE, DEFAULT_AUTO_ROTATE),
+                    split_sheets=opts.get(CONF_SPLIT_SHEETS, DEFAULT_SPLIT_SHEETS),
                 )
                 files = await self.hass.async_add_executor_job(
                     save_pages, pages, directory, fmt or self.file_format

@@ -42,7 +42,8 @@
           "scan_on_button": "Scan when the scanner button is pressed",
           "duplex": "Scan both sides (up to 300 dpi)",
           "deskew": "Straighten skewed pages",
-          "auto_rotate": "Turn upside-down pages around (experimental)"
+          "auto_rotate": "Turn upside-down pages around (experimental)",
+          "split_sheets": "Split a stack into one page per sheet (turn off to keep it as a single page)"
         }
       }
     },
