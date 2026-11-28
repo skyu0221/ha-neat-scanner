@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
+import time
 from datetime import datetime, timedelta, timezone
 
 from homeassistant.config_entries import ConfigEntry
@@ -12,11 +15,13 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
+    AUTO_SEARCH_AFTER, AUTO_SEARCH_EVERY, CALIBRATION_FILE,
     CONF_AUTO_CROP, CONF_AUTO_ROTATE, CONF_SPLIT_SHEETS, DEFAULT_SPLIT_SHEETS, CONF_DESKEW, DEFAULT_AUTO_ROTATE, DEFAULT_DESKEW, STORAGE_VERSION, CONF_BUSID, CONF_DUPLEX, DEFAULT_DUPLEX, CONF_MONITOR, CONF_SCAN_ON_BUTTON, DEFAULT_MONITOR, DEFAULT_SCAN_ON_BUTTON, EVENT_BUTTON, CONF_COLOR, CONF_DPI, CONF_FORMAT, CONF_HOST, CONF_PORT,
     CONF_SAVE_DIR, CONF_SCAN_INTERVAL, CONF_SHEETS, DEFAULT_AUTO_CROP, DEFAULT_COLOR, DEFAULT_DPI,
     DEFAULT_FORMAT, DEFAULT_SAVE_DIR, DEFAULT_SHEETS, DEFAULT_SCAN_INTERVAL, DOMAIN,
     EVENT_SCAN_COMPLETE, NEAT_PID, NEAT_VID,
 )
+from .discovery import async_find_scanners
 from .scanner import SESSION_SETTLE, ScanError, run_calibration, run_scan, save_pages, watch_sensors
 from .usbip_client import UsbIpError, list_devices
 
@@ -51,7 +56,11 @@ class NeatScannerCoordinator(DataUpdateCoordinator[dict]):
         self._button_listeners: list = []
         self._monitor_stop: asyncio.Event | None = None
         self._store: Store = Store(hass, STORAGE_VERSION, f"{DOMAIN}_calibration_{entry.entry_id}")
+        self._backup_store: Store = Store(hass, STORAGE_VERSION, f"{DOMAIN}_calibration_backup")
         self.calibration: dict = {}
+        self._misses = 0
+        self._last_search = 0.0
+        self._search_lock = asyncio.Lock()
 
     @property
     def save_dir(self) -> str:
@@ -67,6 +76,94 @@ class NeatScannerCoordinator(DataUpdateCoordinator[dict]):
 
     async def async_load_calibration(self) -> None:
         self.calibration = await self._store.async_load() or {}
+        if not self.calibration:  # a new entry (for example after re-adding): take the last backup
+            backup = await self._backup_store.async_load()
+            if backup:
+                _LOGGER.info("Restored the scanner calibration from the backup")
+                self.calibration = backup
+                await self._store.async_save(backup)
+
+    async def _async_save_calibration(self) -> None:
+        await self._store.async_save(self.calibration)
+        await self._backup_store.async_save(self.calibration)
+
+    async def async_export_calibration(self, path: str | None = None) -> str:
+        """Write the calibration to a JSON file (default: the save directory) and return the path."""
+        if not self.calibration:
+            raise HomeAssistantError("There is no calibration to export; run Calibrate first")
+        path = path or os.path.join(self.save_dir, CALIBRATION_FILE)
+        if not self.hass.config.is_allowed_path(path):
+            raise HomeAssistantError(f"{path} is not allowed; add its directory to allowlist_external_dirs")
+
+        def write() -> None:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(self.calibration, fh)
+
+        await self.hass.async_add_executor_job(write)
+        return path
+
+    async def async_import_calibration(self, path: str) -> None:
+        """Load a calibration exported earlier (also from another installation)."""
+        if not self.hass.config.is_allowed_path(path):
+            raise HomeAssistantError(f"{path} is not allowed; add its directory to allowlist_external_dirs")
+
+        def read() -> dict:
+            with open(path, encoding="utf-8") as fh:
+                return json.load(fh)
+
+        try:
+            data = await self.hass.async_add_executor_job(read)
+        except (OSError, ValueError) as err:
+            raise HomeAssistantError(f"Cannot read the calibration file: {err}") from err
+        if not isinstance(data, dict) or not isinstance(data.get("front"), dict):
+            raise HomeAssistantError("This is not a Neat scanner calibration file")
+        self.calibration = data
+        await self._async_save_calibration()
+        self.async_update_listeners()
+
+    # --- finding the scanner again after the address changed ------------------------------
+    def _apply_address(self, host: str, port: int, busid: str) -> None:
+        """Store a new address; the update listener reloads the entry."""
+        self.host, self.port, self.busid = host, port, busid
+        self.hass.config_entries.async_update_entry(
+            self.entry,
+            data={**self.entry.data, CONF_HOST: host, CONF_PORT: port, CONF_BUSID: busid},
+            unique_id=f"{host}_{busid}",
+        )
+
+    async def async_find_scanner(self) -> bool:
+        """Search the local network for the scanner and, if found, switch the entry to it.
+
+        Returns True when the entry now points at a scanner (it may be reloaded in a moment).
+        Raises HomeAssistantError when nothing, or more than one scanner, is found."""
+        async with self._search_lock:
+            self._last_search = time.monotonic()
+            found = await async_find_scanners(self.hass, self.port, [self.host])
+            if not found:
+                raise HomeAssistantError(
+                    "No Neat scanner found on the local network. Check that the phone is on the same "
+                    "Wi-Fi and that USBAnywhere is running and sharing the scanner."
+                )
+            current = (self.host, self.port, self.busid)
+            if current in found:
+                return True
+            if len(found) > 1:
+                raise HomeAssistantError(
+                    "More than one scanner was found (" + ", ".join(f"{h}:{p} {b}" for h, p, b in found)
+                    + "); use Reconfigure to pick one"
+                )
+            host, port, busid = found[0]
+            _LOGGER.warning("Neat scanner found at %s:%s (%s) instead of %s:%s (%s): updating the configuration",
+                            host, port, busid, *current)
+            self._apply_address(host, port, busid)
+            return True
+
+    async def _auto_search(self) -> None:
+        try:
+            await self.async_find_scanner()
+        except HomeAssistantError as err:
+            _LOGGER.debug("Automatic scanner search: %s", err)
 
     @property
     def calibrated_at(self) -> datetime | None:
@@ -147,13 +244,24 @@ class NeatScannerCoordinator(DataUpdateCoordinator[dict]):
         try:
             devices = await list_devices(self.host, self.port, timeout=4)
         except UsbIpError:
-            return {"online": False, "reachable": False}
-        scanner = next(
-            (d for d in devices if d.busid == self.busid or (d.vid, d.pid) == (NEAT_VID, NEAT_PID)),
-            None,
-        )
-        return {"online": scanner is not None, "reachable": True,
-                "serial": None, "busid": scanner.busid if scanner else None}
+            devices = None
+        scanner = None
+        if devices is not None:
+            scanner = next(
+                (d for d in devices if d.busid == self.busid and (d.vid, d.pid) == (NEAT_VID, NEAT_PID)), None
+            ) or next((d for d in devices if (d.vid, d.pid) == (NEAT_VID, NEAT_PID)), None)
+        if scanner is not None:
+            self._misses = 0
+            if scanner.busid != self.busid:  # the phone gave the scanner another USB number
+                _LOGGER.warning("The scanner is now %s on the server (was %s): updating the configuration",
+                                scanner.busid, self.busid)
+                self._apply_address(self.host, self.port, scanner.busid)
+            return {"online": True, "reachable": True, "serial": None, "busid": scanner.busid}
+        self._misses += 1
+        if (self._misses >= AUTO_SEARCH_AFTER and not self.scanning and not self._search_lock.locked()
+                and time.monotonic() - self._last_search > AUTO_SEARCH_EVERY):
+            self.entry.async_create_background_task(self.hass, self._auto_search(), "neat_scanner search")
+        return {"online": False, "reachable": devices is not None, "busid": None}
 
     async def async_scan(
         self, dpi: int | None = None, color: str | None = None,
@@ -223,5 +331,5 @@ class NeatScannerCoordinator(DataUpdateCoordinator[dict]):
                 self.async_update_listeners()
                 self.start_monitor()
         self.calibration = cal
-        await self._store.async_save(cal)
+        await self._async_save_calibration()
         self.async_update_listeners()

@@ -8,7 +8,12 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import Event, HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.helpers import config_validation as cv
 
-from .const import COLOR_OPTIONS, DOMAIN, DPI_MAX, DPI_MIN, FORMAT_OPTIONS, SERVICE_CALIBRATE, SERVICE_SCAN
+from homeassistant.helpers.storage import Store
+
+from .const import (
+    COLOR_OPTIONS, DOMAIN, DPI_MAX, DPI_MIN, FORMAT_OPTIONS, SERVICE_CALIBRATE, SERVICE_EXPORT_CALIBRATION,
+    SERVICE_IMPORT_CALIBRATION, SERVICE_SCAN, STORAGE_VERSION,
+)
 from .coordinator import NeatScannerCoordinator
 
 PLATFORMS = ["binary_sensor", "sensor", "select", "number", "button", "event", "switch"]
@@ -69,7 +74,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             DOMAIN, SERVICE_CALIBRATE, _calibrate,
             schema=vol.Schema({vol.Optional("entry_id"): cv.string}),
         )
+
+        async def _export(call: ServiceCall) -> dict:
+            coords = hass.data[DOMAIN]
+            target = coords.get(call.data.get("entry_id")) or next(iter(coords.values()))
+            return {"path": await target.async_export_calibration(call.data.get("path"))}
+
+        hass.services.async_register(
+            DOMAIN, SERVICE_EXPORT_CALIBRATION, _export,
+            schema=vol.Schema({vol.Optional("path"): cv.string, vol.Optional("entry_id"): cv.string}),
+            supports_response=SupportsResponse.OPTIONAL,
+        )
+
+        async def _import(call: ServiceCall) -> None:
+            coords = hass.data[DOMAIN]
+            target = coords.get(call.data.get("entry_id")) or next(iter(coords.values()))
+            await target.async_import_calibration(call.data["path"])
+
+        hass.services.async_register(
+            DOMAIN, SERVICE_IMPORT_CALIBRATION, _import,
+            schema=vol.Schema({vol.Required("path"): cv.string, vol.Optional("entry_id"): cv.string}),
+        )
     return True
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Keep the calibration as a backup that the next entry picks up (the entry id changes)."""
+    store = Store(hass, STORAGE_VERSION, f"{DOMAIN}_calibration_{entry.entry_id}")
+    data = await store.async_load()
+    if data:
+        await Store(hass, STORAGE_VERSION, f"{DOMAIN}_calibration_backup").async_save(data)
+    await store.async_remove()
 
 
 async def _reload(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -84,4 +119,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not hass.data[DOMAIN]:
             hass.services.async_remove(DOMAIN, SERVICE_SCAN)
             hass.services.async_remove(DOMAIN, SERVICE_CALIBRATE)
+            hass.services.async_remove(DOMAIN, SERVICE_EXPORT_CALIBRATION)
+            hass.services.async_remove(DOMAIN, SERVICE_IMPORT_CALIBRATION)
     return ok

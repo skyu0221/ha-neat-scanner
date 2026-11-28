@@ -44,6 +44,37 @@ Plug the scanner into the Android phone, start the USBAnywhere Android server an
 device. The integration finds it by USB ID automatically. Only one client can use the scanner
 at a time, so don't keep it attached from another computer.
 
+## When the phone gets a new address
+
+The integration talks to **one** address (host, port and USB device), it does not watch the whole
+network. When the phone gets a new IP address (new router or internet provider) or the scanner a new
+USB number (after a replug), the integration finds it again:
+
+- **Automatically**: after about a minute of not reaching the scanner it searches the local network
+  (TCP port 3240, only the Home Assistant host's own subnets, at most 1000 addresses), and if exactly
+  one Neat scanner answers it updates the configuration and reloads. It searches at most every 10
+  minutes. If the USB number changed on the same server, it is updated at once.
+- **On demand**: press **Find scanner** (device page, Configuration section) to search now.
+- **By hand**: Settings > Devices & services > Neat ADF scanner > three dots > **Reconfigure**:
+  search the network or enter host and port yourself.
+
+The search needs Home Assistant to see your LAN (host networking, as with Docker `network_mode: host`
+or Home Assistant OS). The phone and Home Assistant must be on the same network. Giving the phone a
+fixed address (DHCP reservation in the router) avoids all of this.
+
+## Calibration backup, export and import
+
+The software calibration (Calibrate button) is stored per integration entry. It survives a
+reconfigure and a restart. If you delete and add the integration again, the last calibration is
+restored automatically from a backup. You can also keep your own copy:
+
+- `neat_scanner.export_calibration` writes `neat_scanner_calibration.json` into the save directory
+  (or the `path` you give; the directory must be in `allowlist_external_dirs`).
+- `neat_scanner.import_calibration` loads such a file (`path`).
+
+The scan programs with the Neat app calibration are separate files, see
+[Use your own calibration](#use-your-own-calibration).
+
 ## Save directory
 
 The directory must be allowed by Home Assistant. `/config/...` always is; for others add to

@@ -45,6 +45,11 @@ FORMAT_OPTIONS = ["png", "jpeg", "pdf"]
 
 SERVICE_SCAN = "scan"
 SERVICE_CALIBRATE = "calibrate"
+SERVICE_EXPORT_CALIBRATION = "export_calibration"
+SERVICE_IMPORT_CALIBRATION = "import_calibration"
+CALIBRATION_FILE = "neat_scanner_calibration.json"
+AUTO_SEARCH_AFTER = 3  # failed status checks before the network is searched for the scanner
+AUTO_SEARCH_EVERY = 600  # seconds between two automatic searches
 STORAGE_VERSION = 1
 EVENT_SCAN_COMPLETE = f"{DOMAIN}_scan_complete"
 EVENT_BUTTON = f"{DOMAIN}_button"

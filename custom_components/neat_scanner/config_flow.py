@@ -12,6 +12,7 @@ from .const import (
     DEFAULT_FORMAT, DEFAULT_PORT, DEFAULT_SAVE_DIR, DEFAULT_SHEETS, DEFAULT_SCAN_INTERVAL,
     DOMAIN, DPI_MAX, DPI_MIN, FORMAT_OPTIONS, NEAT_PID, NEAT_VID,
 )
+from .discovery import async_find_scanners
 from .usbip_client import UsbIpError, list_devices
 
 
@@ -62,6 +63,75 @@ class NeatScannerConfigFlow(ConfigFlow, domain=DOMAIN):
             vol.Required(CONF_BUSID, **({"default": default} if default else {})): vol.In(self._devices)
         })
         return self.async_show_form(step_id="device", data_schema=schema)
+
+    # --- reconfigure: the phone got another address (new router, new provider) ---------------
+    async def async_step_reconfigure(self, user_input=None):
+        return self.async_show_menu(step_id="reconfigure", menu_options=["reconfigure_scan", "reconfigure_manual"])
+
+    def _finish_reconfigure(self, host: str, port: int, busid: str):
+        entry = self._get_reconfigure_entry()
+        self.hass.config_entries.async_update_entry(
+            entry, data={**entry.data, CONF_HOST: host, CONF_PORT: port, CONF_BUSID: busid},
+            unique_id=f"{host}_{busid}",
+        )  # the update listener reloads the entry
+        return self.async_abort(reason="reconfigure_successful")
+
+    async def async_step_reconfigure_scan(self, user_input=None):
+        entry = self._get_reconfigure_entry()
+        if user_input is None:
+            found = await async_find_scanners(self.hass, entry.data[CONF_PORT], [entry.data[CONF_HOST]])
+            if not found:
+                return self.async_show_form(
+                    step_id="reconfigure_manual", errors={"base": "not_found"},
+                    data_schema=self._manual_schema(entry.data[CONF_HOST], entry.data[CONF_PORT]),
+                )
+            self._found = {f"{h}:{p}|{b}": (h, p, b) for h, p, b in found}
+            choices = {k: f"{h}:{p} ({b})" for k, (h, p, b) in self._found.items()}
+            return self.async_show_form(
+                step_id="reconfigure_scan",
+                data_schema=vol.Schema({vol.Required("scanner", default=next(iter(choices))): vol.In(choices)}),
+            )
+        return self._finish_reconfigure(*self._found[user_input["scanner"]])
+
+    @staticmethod
+    def _manual_schema(host: str = "", port: int = DEFAULT_PORT):
+        return vol.Schema({vol.Required(CONF_HOST, default=host): str, vol.Required(CONF_PORT, default=port): int})
+
+    async def async_step_reconfigure_manual(self, user_input=None):
+        entry = self._get_reconfigure_entry()
+        errors = {}
+        if user_input is not None:
+            try:
+                devices = await list_devices(user_input[CONF_HOST], user_input[CONF_PORT])
+            except UsbIpError:
+                errors["base"] = "cannot_connect"
+            else:
+                if not devices:
+                    errors["base"] = "no_devices"
+                else:
+                    self._data = user_input
+                    self._devices = {
+                        d.busid: f"{d.busid} ({d.vid:04x}:{d.pid:04x})"
+                        + (" – Neat ADF scanner" if (d.vid, d.pid) == (NEAT_VID, NEAT_PID) else "")
+                        for d in devices
+                    }
+                    return await self.async_step_reconfigure_device()
+        cur = user_input or entry.data
+        return self.async_show_form(
+            step_id="reconfigure_manual", data_schema=self._manual_schema(cur[CONF_HOST], cur[CONF_PORT]),
+            errors=errors,
+        )
+
+    async def async_step_reconfigure_device(self, user_input=None):
+        if user_input is not None:
+            return self._finish_reconfigure(self._data[CONF_HOST], self._data[CONF_PORT], user_input[CONF_BUSID])
+        default = next((b for b, label in self._devices.items() if "Neat" in label), None)
+        return self.async_show_form(
+            step_id="reconfigure_device",
+            data_schema=vol.Schema({
+                vol.Required(CONF_BUSID, **({"default": default} if default else {})): vol.In(self._devices)
+            }),
+        )
 
     @staticmethod
     @callback

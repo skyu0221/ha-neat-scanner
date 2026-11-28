@@ -42,3 +42,24 @@ calibrate:
       advanced: true
       selector:
         text:
+
+export_calibration:
+  fields:
+    path:
+      selector:
+        text:
+    entry_id:
+      advanced: true
+      selector:
+        text:
+
+import_calibration:
+  fields:
+    path:
+      required: true
+      selector:
+        text:
+    entry_id:
+      advanced: true
+      selector:
+        text:

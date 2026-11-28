@@ -15,15 +15,45 @@
         "data": {
           "busid": "USB device"
         }
+      },
+      "reconfigure": {
+        "title": "Change the scanner address",
+        "description": "Use this when the phone got a new IP address, for example after a new router or internet provider.",
+        "menu_options": {
+          "reconfigure_scan": "Search the network for the scanner",
+          "reconfigure_manual": "Enter the address myself"
+        }
+      },
+      "reconfigure_scan": {
+        "title": "Scanner found",
+        "description": "Choose the scanner to use.",
+        "data": {
+          "scanner": "Scanner"
+        }
+      },
+      "reconfigure_manual": {
+        "title": "Enter the address",
+        "data": {
+          "host": "Host",
+          "port": "Port"
+        }
+      },
+      "reconfigure_device": {
+        "title": "Choose the scanner",
+        "data": {
+          "busid": "USB device"
+        }
       }
     },
     "error": {
       "cannot_connect": "Cannot reach the USB/IP server",
       "no_devices": "The server is not sharing any USB devices",
-      "dir_not_allowed": "This directory is not allowed. Add it to allowlist_external_dirs."
+      "dir_not_allowed": "This directory is not allowed. Add it to allowlist_external_dirs.",
+      "not_found": "No scanner was found on the network. Check the phone is on the same Wi-Fi and USBAnywhere is sharing the scanner, or enter the address."
     },
     "abort": {
-      "already_configured": "This scanner is already configured"
+      "already_configured": "This scanner is already configured",
+      "reconfigure_successful": "The scanner address was updated"
     }
   },
   "options": {
@@ -99,6 +129,9 @@
       },
       "calibrate": {
         "name": "Calibrate"
+      },
+      "find_scanner": {
+        "name": "Find scanner"
       }
     },
     "event": {
@@ -167,6 +200,34 @@
       "name": "Calibrate",
       "description": "Scan a blank white letter-size sheet to measure the white level of every sensor column, so the left and right regions of later scans match.",
       "fields": {
+        "entry_id": {
+          "name": "Config entry",
+          "description": "Only needed with several scanners."
+        }
+      }
+    },
+    "export_calibration": {
+      "name": "Export calibration",
+      "description": "Save the software calibration to a JSON file so it can be restored later or used on another installation.",
+      "fields": {
+        "path": {
+          "name": "File",
+          "description": "Default: neat_scanner_calibration.json in the save directory. The directory must be allowed in allowlist_external_dirs."
+        },
+        "entry_id": {
+          "name": "Config entry",
+          "description": "Only needed with several scanners."
+        }
+      }
+    },
+    "import_calibration": {
+      "name": "Import calibration",
+      "description": "Load a calibration file written by Export calibration.",
+      "fields": {
+        "path": {
+          "name": "File",
+          "description": "Path of the JSON file."
+        },
         "entry_id": {
           "name": "Config entry",
           "description": "Only needed with several scanners."
