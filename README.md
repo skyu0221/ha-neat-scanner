@@ -150,7 +150,8 @@ scan made with a Windows scan application that lets you pick the resolution. See
   program.
 - A scan call feeds **every sheet in the feeder** and produces one image per sheet. The 300 dpi
   programs keep feeding on their own, so the integration splits the stream into sheets at the short
-  gap between them (the `sheets` option only caps how many pages are kept). Load the whole stack at
+  gap between them or where the paper edge jumps (the `sheets` option only caps how many pages are kept).
+  Receipts of different widths, such as small ones from the small receipt dock, can be mixed in one stack. Load the whole stack at
   once. A piece shorter than 1 inch is never a sheet and is joined to its neighbour. Turn the option *Split a
   stack into one page per sheet* off to keep a stack as one page. The 600 dpi program stops after each sheet and skip the eject step in between.
 - A 300 dpi receipt takes about 45 seconds, 600 dpi about 90 seconds

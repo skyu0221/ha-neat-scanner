@@ -342,6 +342,10 @@ def estimate_size(dpi: int, color: str, fmt: str) -> dict:
 
 CONTINUOUS_MODES = {"c300", "d300", "g300"}  # programs that keep feeding until the feeder is empty
 MIN_SHEET_ROWS = 300  # a sheet is at least this tall (1 inch at 300 dpi); shorter pieces are joined
+SKIP_COLS = 20  # sensor columns (every 3rd) left out when looking for paper
+MAX_GAP_ROWS = 80  # a longer dip is not the gap between two sheets
+MIN_PAPER_PX = 60  # paper at least this wide (every 3rd column, about 0.6 in) around a gap
+EDGE_SHIFT = 3  # the paper edges of two sheets differ by at least this many columns (every 3rd)
 GAP_ROWS = 2  # a gap between two sheets is at least this many rows with (almost) no paper (3 to 14 seen)
 
 
@@ -349,8 +353,10 @@ def sheet_ranges(raw: bytes, mode: str, split: bool = True) -> list[tuple[int, i
     """Split a continuous multi-sheet stream into per-sheet row ranges (in scan order).
 
     With these programs the scanner pulls the next sheet in on its own, so the stream has no
-    page marker; the sheets are separated by a short gap (3 to 14 rows at 300 dpi, depending on how the sheets touch) in which the
-    sensor sees almost no paper. Returns ``[(first_row, last_row_exclusive), ...]`` in units of
+    page marker; between two sheets there is a short gap (3 to 17 rows at 300 dpi) in which the
+    sensor sees almost no paper, or at least the paper edges jump (another width or position, for
+    example a small receipt behind a normal one). A crease or a printed black band inside a sheet
+    also dips but keeps the paper edges, so it is not a gap. Returns ``[(first_row, last_row_exclusive), ...]`` in units of
     sensor rows (R, G, B lines or one gray line, or the front side of a duplex stream).
     """
     import numpy as np
@@ -360,36 +366,50 @@ def sheet_ranges(raw: bytes, mode: str, split: bool = True) -> list[tuple[int, i
     rows = len(raw) // line // nl
     if rows < 8 or mode not in CONTINUOUS_MODES or not split:
         return [(0, rows)]
-    img = _assemble(raw[: rows * nl * line], mode)[::-1, ::3, 1]  # scan order, every 3rd column, green
-    col = np.percentile(img[:: max(1, rows // 300)], 90, axis=0)
-    cols = np.where(col > 0.6 * col.max())[0]
-    if len(cols) < 20:
-        return [(0, rows)]
-    sub = img[:, cols[0] : cols[-1] + 1].astype(np.float32)
-    white = float(np.percentile(sub[:: max(1, rows // 300)], 95))
-    frac = (sub > 0.7 * white).mean(axis=1)
-    dark = frac < 0.5
+    img = _assemble(raw[: rows * nl * line], mode)[::-1, ::3, 1].astype(np.float32)  # scan order, every 3rd column, green
+    sub = img[:, SKIP_COLS:]  # the first sensor columns read about the same with and without paper
+    white = float(np.percentile(sub[:: max(1, rows // 300)], 97))
+    bright = sub > 0.7 * white
+    cnt = bright.sum(axis=1).astype(np.int32)  # paper pixels per row, wherever the paper is
+    width = bright.shape[1]
+    left = bright.argmax(axis=1)
+    right = width - 1 - bright[:, ::-1].argmax(axis=1)
+    padded = np.pad(cnt, 30, mode="edge")
+    typical = np.median(np.lib.stride_tricks.sliding_window_view(padded, 61), axis=1)  # paper width around a row
+    dip = cnt < 0.5 * typical
     cuts, r = [], 0
     while r < rows:
-        if not dark[r]:
+        if not dip[r]:
             r += 1
             continue
         e = r
-        while e < rows and dark[e]:
+        while e < rows and dip[e]:
             e += 1
-        # an interior gap: paper on both sides
-        # a real gap gets close to empty (min <= 0.25); a printed rule of asterisks only dips to ~0.35
-        if e - r >= GAP_ROWS and frac[r:e].min() < 0.25 and r > 30 and rows - e > 30 \
-                and frac[max(0, r - 12) : r].mean() > 0.5 and frac[e : e + 12].mean() > 0.5:
-            cuts.append((r + e) // 2)
-            _LOGGER.info("sheet gap at row %d: %d rows, min paper %.2f", r, e - r, float(frac[r:e].min()))
-        elif e - r >= 2 and r > 30 and rows - e > 30:
-            _LOGGER.debug("not a sheet gap: rows %d-%d, min paper %.2f", r, e, float(frac[r:e].min()))
+        if GAP_ROWS <= e - r <= MAX_GAP_ROWS and r > 35 and rows - e > 35:
+            before, after = slice(r - 35, r - 3), slice(e + 3, min(rows, e + 35))
+            tb, ta = float(np.median(cnt[before])), float(np.median(cnt[after]))
+            typ = min(tb, ta)
+            if typ >= MIN_PAPER_PX:
+                ok_b, ok_a = cnt[before] >= 0.5 * tb, cnt[after] >= 0.5 * ta
+                shift = max(
+                    abs(float(np.median(left[before][ok_b])) - float(np.median(left[after][ok_a]))),
+                    abs(float(np.median(right[before][ok_b])) - float(np.median(right[after][ok_a]))),
+                )
+                low = int(cnt[r:e].min())
+                # Two sheets: the sensor sees (almost) no paper, or the paper edges jump. A crease or a
+                # printed black band also dips but the paper edges stay where they were.
+                if low < 0.03 * typ or shift >= EDGE_SHIFT:
+                    cuts.append((r + e) // 2)
+                    _LOGGER.info("sheet gap at row %d: %d rows, paper %d of %.0f px, edge shift %.1f px",
+                                 r, e - r, low, typ, shift)
+                else:
+                    _LOGGER.debug("not a sheet gap: rows %d-%d, paper %d of %.0f px, edge shift %.1f px",
+                                  r, e, low, typ, shift)
         r = e
     bounds = [0] + cuts + [rows]
     out = []
     for a, b in zip(bounds, bounds[1:]):
-        if (frac[a:b] > 0.7).sum() >= 30:  # skip blank stretches
+        if (cnt[a:b] >= 25).sum() >= 30:  # skip blank stretches
             out.append((a, b))
     # A piece shorter than MIN_SHEET_ROWS is no sheet: it is a printed rule or a glitch that looked like a
     # gap, so join it to its neighbour instead of losing it.
